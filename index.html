@@ -13,7 +13,7 @@
             --success-color: #03ae37;
             --error-color: #f72585;
             --background-color: #ffffff;
-            --card-color: ##dbdbdb;
+            --card-color: #dbdbdb; /* Fixed double # */
             --text-color: #212529;
             --text-secondary: #6c757d;
             --border-color: #dee2e6;
@@ -72,40 +72,6 @@
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
         }
 
-        .tabs {
-            display: flex;
-            margin-bottom: 20px;
-            background-color: #f1f3f5;
-            border-radius: var(--border-radius);
-            padding: 4px;
-        }
-
-        .tab-button {
-            flex: 1;
-            padding: 12px 15px;
-            background-color: transparent;
-            border: none;
-            border-radius: var(--border-radius);
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 500;
-            color: var(--text-secondary);
-            transition: var(--transition);
-        }
-
-        .tab-button:hover:not(.active) {
-            background-color: rgba(255, 255, 255, 0.5);
-        }
-
-        .tab-button.active {
-            background-color: var(--primary-color);
-            color: white;
-        }
-
-        .tab-button i {
-            margin-right: 8px;
-        }
-
         .input-group {
             margin-bottom: 20px;
         }
@@ -119,7 +85,7 @@
 
         .textarea {
             width: 100%;
-            height: 200px;
+            height: 250px; /* Increased height */
             padding: 12px;
             border: 1px solid var(--border-color);
             border-radius: var(--border-radius);
@@ -258,7 +224,6 @@
             border-top: 1px solid var(--border-color);
         }
 
-
         /* Responsive adjustments */
         @media (max-width: 768px) {
             .container {
@@ -315,9 +280,34 @@
         }
 
         .json-braces {
-        color: #0D47A1;
+            color: #0D47A1;
+        }
+     
+        .result-content {
+            position: relative;
+            padding-left: 3.5em;  /* Make room for line numbers */
+            counter-reset: line;
         }
 
+        .line {
+            display: block;
+            position: relative;
+            white-space: pre-wrap;
+        }
+
+        .line::before {
+            content: counter(line);
+            counter-increment: line;
+            position: absolute;
+            left: -3em;
+            width: 2.5em;
+            text-align: right;
+            color: #999;
+            font-size: 0.9em;
+            border-right: 1px solid #ddd;
+            padding-right: 0.5em;
+            user-select: none;
+        }
     </style>
 </head>
 <body>
@@ -328,53 +318,26 @@
         </header>
         
         <main class="card">
-            <div class="tabs">
-                <button class="tab-button active" id="phrase-tab">
-                    <i class="fas fa-exchange-alt"></i>Convert
-                </button>
-                <button class="tab-button" id="validate-tab">
-                    <i class="fas fa-check-circle"></i>Validate
-                </button>
-            </div>
-            
-            <div id="phrase-form">
+            <!-- Unified form replacing the tabs and separate forms -->
+            <div id="unified-form">
                 <div class="input-group">
-                    <label class="input-label" for="phrase-input">
-                        <i class="fas fa-keyboard"></i> Enter Phrase or JSON
+                    <label class="input-label" for="input-area">
+                        <i class="fas fa-code"></i> Enter JSON or Phrase
                     </label>
-                    <textarea class="textarea" id="phrase-input" placeholder="Enter in format: key: value, key2: value2&#10;&#10;Or paste valid JSON&#10;&#10;Examples:&#10;name: John, age: 30, hobbies: [reading, gaming, hiking]&#10;&#10;address: {city: New York, zip: 10001}"></textarea>
+                    <textarea class="textarea" id="input-area" placeholder="Enter valid JSON or key-value pairs like:&#10;name: John, age: 30, hobbies: [reading, gaming, hiking]&#10;&#10;Or paste JSON like:&#10;{&#10;  &quot;name&quot;: &quot;John&quot;,&#10;  &quot;age&quot;: 30,&#10;  &quot;hobbies&quot;: [&quot;reading&quot;, &quot;gaming&quot;, &quot;hiking&quot;]&#10;}"></textarea>
                 </div>
                 <div class="button-group">
-                    <button class="button" id="convert-button">
-                        <i class="fas fa-magic"></i>Format to JSON
+                    <button class="button" id="process-button">
+                        <i class="fas fa-magic"></i>Process
                     </button>
-                    <button class="button clear-button" id="clear-convert-button">
-                        <i class="fas fa-eraser"></i>Clear
-                    </button>
-                </div>
-            </div>
-            
-            <div id="validate-form" style="display: none;">
-                <div class="input-group">
-                    <label class="input-label" for="json-input">
-                        <i class="fas fa-code"></i> Enter JSON to Validate
-                    </label>
-                    <textarea class="textarea" id="json-input" placeholder='Paste JSON to validate&#10;&#10;Example:&#10;{&#10;  "name": "John",&#10;  "age": 30,&#10;  "address": {&#10;    "city": "New York",&#10;    "zip": 10001&#10;  }&#10;}'></textarea>
-                </div>
-                <div class="button-group">
-                    <button class="button" id="validate-button">
-                        <i class="fas fa-check"></i>Validate JSON
-                    </button>
-                    <button class="button clear-button" id="clear-validate-button">
+                    <button class="button clear-button" id="clear-button">
                         <i class="fas fa-eraser"></i>Clear
                     </button>
                 </div>
             </div>
             
             <div class="message error" id="error-message"></div>
-            <div class="message success" id="success-message">
-                <i class="fas fa-check-circle"></i> JSON is valid
-            </div>
+            <div class="message success" id="success-message"></div>
             
             <div class="result-container" id="result-container">
                 <div class="result-header">
@@ -395,48 +358,19 @@
     </div>
 
     <script>
-        // DOM Elements
-        const phraseTab = document.getElementById('phrase-tab');
-        const validateTab = document.getElementById('validate-tab');
-        const phraseForm = document.getElementById('phrase-form');
-        const validateForm = document.getElementById('validate-form');
-        const phraseInput = document.getElementById('phrase-input');
-        const jsonInput = document.getElementById('json-input');
-        const convertButton = document.getElementById('convert-button');
-        const validateButton = document.getElementById('validate-button');
-        const clearConvertButton = document.getElementById('clear-convert-button');
-        const clearValidateButton = document.getElementById('clear-validate-button');
+        // DOM Elements (simplified for unified interface)
+        const inputArea = document.getElementById('input-area');
+        const processButton = document.getElementById('process-button');
+        const clearButton = document.getElementById('clear-button');
         const resultContainer = document.getElementById('result-container');
         const resultContent = document.getElementById('result-content');
         const errorMessage = document.getElementById('error-message');
         const successMessage = document.getElementById('success-message');
         const copyButton = document.getElementById('copy-button');
 
-        // Tab switching
-        phraseTab.addEventListener('click', () => {
-            phraseTab.classList.add('active');
-            validateTab.classList.remove('active');
-            phraseForm.style.display = 'block';
-            validateForm.style.display = 'none';
-            clearResults();
-        });
-
-        validateTab.addEventListener('click', () => {
-            validateTab.classList.add('active');
-            phraseTab.classList.remove('active');
-            validateForm.style.display = 'block';
-            phraseForm.style.display = 'none';
-            clearResults();
-        });
-
-        // Clear buttons
-        clearConvertButton.addEventListener('click', () => {
-            phraseInput.value = '';
-            clearResults();
-        });
-
-        clearValidateButton.addEventListener('click', () => {
-            jsonInput.value = '';
+        // Clear button handler
+        clearButton.addEventListener('click', () => {
+            inputArea.value = '';
             clearResults();
         });
 
@@ -450,38 +384,53 @@
             }
         }
 
-        // Function to convert phrase to JSON
-        function phraseToJson(phrase) {
+        // Unified process function that handles both conversion and validation
+        function processJsonInput(input) {
+            input = input.trim();
+            
+            if (!input) {
+                throw new Error('Please enter JSON or a key-value phrase');
+            }
+            
+            // First check if the input is already valid JSON
             try {
-                // First check if the input is already valid JSON
-                if (isValidJSON(phrase)) {
-                    // It's already JSON, just format it
-                    const parsed = JSON.parse(phrase);
-                    return JSON.stringify(parsed, null, 2);
+                const parsed = JSON.parse(input);
+                // If we reach here, it's valid JSON
+                return {
+                    result: JSON.stringify(parsed, null, 2),
+                    isValidJson: true,
+                    message: 'Valid JSON'
+                };
+            } catch (e) {
+                // Not valid JSON, try to convert from phrase
+                try {
+                    // Process as comma-separated key-values
+                    const result = {};
+                    
+                    // Split by commas but respect brackets and parentheses
+                    const parts = splitRespectingBrackets(input);
+                    
+                    parts.forEach(part => {
+                        // Check for key-value pairs (contains a colon)
+                        if (part.includes(':')) {
+                            let [key, value] = splitAtFirstColon(part);
+                            key = key.trim();
+                            value = value.trim();
+                            
+                            // Handle different value types
+                            result[key] = parseValue(value);
+                        }
+                    });
+                    
+                    // Format the JSON with proper indentation
+                    return {
+                        result: JSON.stringify(result, null, 2),
+                        isValidJson: false,
+                        message: 'Successfully converted phrase to JSON'
+                    };
+                } catch (err) {
+                    throw new Error('Could not process input: ' + err.message);
                 }
-                
-                // Process as comma-separated key-values
-                const result = {};
-                
-                // Split by commas but respect brackets and parentheses
-                const parts = splitRespectingBrackets(phrase);
-                
-                parts.forEach(part => {
-                    // Check for key-value pairs (contains a colon)
-                    if (part.includes(':')) {
-                        let [key, value] = splitAtFirstColon(part);
-                        key = key.trim();
-                        value = value.trim();
-                        
-                        // Handle different value types
-                        result[key] = parseValue(value);
-                    }
-                });
-                
-                // Format the JSON with proper indentation
-                return JSON.stringify(result, null, 2);
-            } catch (err) {
-                throw new Error('Failed to convert phrase to JSON: ' + err.message);
             }
         }
         
@@ -618,40 +567,30 @@
             return value;
         }
 
-        // Function to validate JSON
-        function validateJson(jsonString) {
-            try {
-                const parsed = JSON.parse(jsonString);
-                return JSON.stringify(parsed, null, 2);
-            } catch (err) {
-                throw new Error('Invalid JSON: ' + err.message);
-            }
-        }
-
         // Function to syntax highlight JSON
         function syntaxHighlight(json) {
-    let result = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            let result = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    result = result.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-        let cls = 'json-number';
-        if (/^"/.test(match)) {
-            if (/:$/.test(match)) {
-                cls = 'json-key';
-            } else {
-                cls = 'json-string';
-            }
-        } else if (/true|false/.test(match)) {
-            cls = 'json-boolean';
-        } else if (/null/.test(match)) {
-            cls = 'json-null';
+            result = result.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+            
+            result = result.replace(/([{}[\]])/g, '<span class="json-braces">$1</span>');
+            
+            return result;
         }
-        return '<span class="' + cls + '">' + match + '</span>';
-    });
-    
-    result = result.replace(/([{}[\]])/g, '<span class="json-braces">$1</span>');
-    
-    return result;
-}
 
         // Clear results and errors
         function clearResults() {
@@ -671,54 +610,34 @@
 
         // Show result
         function showResult(resultText, isValid = false) {
-            resultContent.innerHTML = syntaxHighlight(resultText);
+            // First, apply syntax highlighting
+            const highlightedText = syntaxHighlight(resultText);
+            
+            // Split the text by newlines and wrap each line in a span
+            const lines = highlightedText.split('\n');
+            const linesWithNumbers = lines.map(line => 
+                `<span class="line">${line}</span>`
+            ).join('\n');
+            
+            // Add the formatted text to the result container
+            resultContent.innerHTML = linesWithNumbers;
             resultContainer.style.display = 'block';
             errorMessage.style.display = 'none';
-            
-            // Show success message for valid JSON
-            if (isValid) {
-                successMessage.style.display = 'block';
-                successMessage.classList.add('fade-in');
-            } else {
-                successMessage.style.display = 'none';
-            }
         }
 
-        // Convert button click handler
-        convertButton.addEventListener('click', () => {
-            const phrase = phraseInput.value.trim();
-            
-            if (!phrase) {
-                showError('Please enter a phrase or valid JSON');
-                return;
-            }
+        // Process button click handler
+        processButton.addEventListener('click', () => {
+            const input = inputArea.value;
             
             try {
-                const jsonResult = phraseToJson(phrase);
-                const isAlreadyValidJSON = isValidJSON(phrase);
+                const { result, isValidJson, message } = processJsonInput(input);
+                showResult(result, isValidJson);
                 
-                if (isAlreadyValidJSON) {
-                    showResult(jsonResult, true); // Show success message for valid JSON
-                } else {
-                    showResult(jsonResult); // No success message for phrase conversion
+                if (isValidJson || result) {
+                    successMessage.innerHTML = '<i class="fas fa-check-circle"></i> ' + message;
+                    successMessage.style.display = 'block';
+                    successMessage.classList.add('fade-in');
                 }
-            } catch (err) {
-                showError(err.message);
-            }
-        });
-
-        // Validate button click handler
-        validateButton.addEventListener('click', () => {
-            const json = jsonInput.value.trim();
-            
-            if (!json) {
-                showError('Please enter JSON to validate');
-                return;
-            }
-            
-            try {
-                const validatedJson = validateJson(json);
-                showResult(validatedJson, true); // true indicates valid JSON
             } catch (err) {
                 showError(err.message);
             }
@@ -766,15 +685,9 @@
         });
 
         // Handle Enter key in textarea
-        phraseInput.addEventListener('keydown', function(e) {
+        inputArea.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && e.ctrlKey) {
-                convertButton.click();
-            }
-        });
-
-        jsonInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                validateButton.click();
+                processButton.click();
             }
         });
     </script>
