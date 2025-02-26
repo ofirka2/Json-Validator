@@ -88,6 +88,24 @@
             border-radius: 4px;
             overflow-x: auto;
         }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .copy-button {
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .copy-button:hover {
+            background-color: #219653;
+        }
         pre {
             margin: 0;
             white-space: pre-wrap;
@@ -116,16 +134,13 @@
         <h1>JSON Converter & Validator</h1>
         
         <div class="tabs">
-            <button class="tab-button active" id="phrase-tab">Phrase JSON</button>
+            <button class="tab-button active" id="phrase-tab">Phrase JSON </button>
             <button class="tab-button" id="validate-tab">Validate JSON</button>
         </div>
         
-        <div class="error" id="error-message"></div>
-    <div class="success" id="success-message">JSON is valid</div>
-        
         <div id="phrase-form">
             <label for="phrase-input">Enter Phrase (format: key: value, key2: value2) or Paste JSON</label>
-            <textarea id="phrase-input" placeholder="name: John, age: 30, isActive: true"></textarea>
+            <textarea id="phrase-input" placeholder="name: John, age: 30, isActive: true, hobbies: [reading, gaming, hiking], address: {city: New York, zip: 10001}"></textarea>
             <button class="button" id="convert-button">Format to JSON</button>
         </div>
         
@@ -135,8 +150,14 @@
             <button class="button" id="validate-button">Validate JSON</button>
         </div>
         
+        <div class="error" id="error-message"></div>
+        <div class="success" id="success-message">JSON is valid</div>
+        
         <div class="result" id="result-container" style="display: none;">
-            <h3>Result:</h3>
+            <div class="result-header">
+                <h3>Result:</h3>
+                <button class="copy-button" id="copy-button">Copy to Clipboard</button>
+            </div>
             <pre id="result-content"></pre>
         </div>
     </div>
@@ -155,6 +176,7 @@
         const resultContent = document.getElementById('result-content');
         const errorMessage = document.getElementById('error-message');
         const successMessage = document.getElementById('success-message');
+        const copyButton = document.getElementById('copy-button');
 
         // Tab switching
         phraseTab.addEventListener('click', () => {
@@ -183,7 +205,7 @@
             }
         }
 
-        // Function to convert phrase to JSON
+        // Function to convert phrase to JSON (simplified version)
         function phraseToJson(phrase) {
             try {
                 // First check if the input is already valid JSON
@@ -193,20 +215,41 @@
                     return JSON.stringify(parsed, null, 2);
                 }
                 
-                // Otherwise, process as comma-separated key-values
+                // Otherwise, process as comma-separated key-values with simple parsing
                 const parts = phrase.split(',').map(part => part.trim());
                 const result = {};
                 
                 parts.forEach(part => {
                     if (part.includes(':')) {
-                        const [key, value] = part.split(':').map(item => item.trim());
+                        const colonIndex = part.indexOf(':');
+                        const key = part.substring(0, colonIndex).trim();
+                        let value = part.substring(colonIndex + 1).trim();
                         
-                        if (value.toLowerCase() === 'true') {
+                        // Handle different value types
+                        if (value.toLowerCase() === 'null') {
+                            result[key] = null;
+                        } else if (value.toLowerCase() === 'true') {
                             result[key] = true;
                         } else if (value.toLowerCase() === 'false') {
                             result[key] = false;
                         } else if (!isNaN(value) && value !== '') {
                             result[key] = Number(value);
+                        } else if (value.startsWith('[') && value.endsWith(']')) {
+                            // Simple array handling
+                            try {
+                                result[key] = JSON.parse(value);
+                            } catch (e) {
+                                // If JSON parsing fails, treat as string
+                                result[key] = value;
+                            }
+                        } else if (value.startsWith('{') && value.endsWith('}')) {
+                            // Simple object handling
+                            try {
+                                result[key] = JSON.parse(value);
+                            } catch (e) {
+                                // If JSON parsing fails, treat as string
+                                result[key] = value;
+                            }
                         } else {
                             // Check if value already has quotes
                             const hasQuotes = (value.startsWith('"') && value.endsWith('"')) || 
@@ -224,10 +267,7 @@
                 });
                 
                 // Format the JSON with proper indentation
-                let output = JSON.stringify(result, null, 2);
-                // Replace escaped quotes with regular quotes
-                output = output.replace(/\\"/g, '"');
-                return output;
+                return JSON.stringify(result, null, 2);
             } catch (err) {
                 throw new Error('Failed to convert phrase to JSON: ' + err.message);
             }
@@ -237,7 +277,7 @@
         function validateJson(jsonString) {
             try {
                 const parsed = JSON.parse(jsonString);
-                return JSON.stringify(parsed, null, 2).replace(/\\\\/g, '\\').replace(/\\"/g, '"');
+                return JSON.stringify(parsed, null, 2);
             } catch (err) {
                 throw new Error('Invalid JSON: ' + err.message);
             }
@@ -310,6 +350,33 @@
             } catch (err) {
                 showError(err.message);
             }
+        });
+
+        // Copy to clipboard functionality
+        copyButton.addEventListener('click', function() {
+            const textToCopy = resultContent.textContent;
+            
+            // Create a temporary textarea element to handle the copy
+            const textarea = document.createElement('textarea');
+            textarea.value = textToCopy;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'absolute';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            
+            // Select the text and copy it
+            textarea.select();
+            document.execCommand('copy');
+            
+            // Clean up and provide feedback
+            document.body.removeChild(textarea);
+            
+            const originalText = copyButton.textContent;
+            copyButton.textContent = 'Copied!';
+            
+            setTimeout(function() {
+                copyButton.textContent = originalText;
+            }, 2000);
         });
     </script>
 </body>
