@@ -12,8 +12,8 @@
             --primary-dark: #3a0ca3;
             --success-color: #4cc9f0;
             --error-color: #f72585;
-            --background-color: #f8f9fa;
-            --card-color: #ffffff;
+            --background-color: #ffffff;
+            --card-color: ##dbdbdb;
             --text-color: #212529;
             --text-secondary: #6c757d;
             --border-color: #dee2e6;
@@ -258,6 +258,7 @@
             border-top: 1px solid var(--border-color);
         }
 
+
         /* Responsive adjustments */
         @media (max-width: 768px) {
             .container {
@@ -312,6 +313,11 @@
         .json-null {
             color: #fd971f;
         }
+
+        .json-braces {
+        color: #ff0000;
+        }
+
     </style>
 </head>
 <body>
@@ -624,23 +630,28 @@
 
         // Function to syntax highlight JSON
         function syntaxHighlight(json) {
-            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-                let cls = 'json-number';
-                if (/^"/.test(match)) {
-                    if (/:$/.test(match)) {
-                        cls = 'json-key';
-                    } else {
-                        cls = 'json-string';
-                    }
-                } else if (/true|false/.test(match)) {
-                    cls = 'json-boolean';
-                } else if (/null/.test(match)) {
-                    cls = 'json-null';
-                }
-                return '<span class="' + cls + '">' + match + '</span>';
-            });
+    let result = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    result = result.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+        let cls = 'json-number';
+        if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+                cls = 'json-key';
+            } else {
+                cls = 'json-string';
+            }
+        } else if (/true|false/.test(match)) {
+            cls = 'json-boolean';
+        } else if (/null/.test(match)) {
+            cls = 'json-null';
         }
+        return '<span class="' + cls + '">' + match + '</span>';
+    });
+    
+    result = result.replace(/([{}[\]])/g, '<span class="json-braces">$1</span>');
+    
+    return result;
+}
 
         // Clear results and errors
         function clearResults() {
