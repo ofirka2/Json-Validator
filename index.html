@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSON Converter & Validator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .tab-button {
+            flex: 1;
+            padding: 10px;
+            background-color: #e9e9e9;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .tab-button.active {
+            background-color: #3498db;
+            color: white;
+        }
+        .tab-button:first-child {
+            border-top-left-radius: 4px;
+            border-bottom-left-radius: 4px;
+        }
+        .tab-button:last-child {
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 10px;
+            margin-bottom: 15px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            resize: vertical;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .button:hover {
+            background-color: #2980b9;
+        }
+        .result {
+            margin-top: 20px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .error {
+            color: #e74c3c;
+            background-color: #fadbd8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        .success {
+            color: #27ae60;
+            background-color: #d4f8e8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>JSON Converter & Validator</h1>
+        
+        <div class="tabs">
+            <button class="tab-button active" id="phrase-tab">Phrase JSON</button>
+            <button class="tab-button" id="validate-tab">Validate JSON</button>
+        </div>
+        
+        <div class="error" id="error-message"></div>
+    <div class="success" id="success-message">JSON is valid</div>
+        
+        <div id="phrase-form">
+            <label for="phrase-input">Enter Phrase (format: key: value, key2: value2) or Paste JSON</label>
+            <textarea id="phrase-input" placeholder="name: John, age: 30, isActive: true"></textarea>
+            <button class="button" id="convert-button">Format to JSON</button>
+        </div>
+        
+        <div id="validate-form" style="display: none;">
+            <label for="json-input">Enter JSON to Validate</label>
+            <textarea id="json-input" placeholder='{ "name": "John", "age": 30 }'></textarea>
+            <button class="button" id="validate-button">Validate JSON</button>
+        </div>
+        
+        <div class="result" id="result-container" style="display: none;">
+            <h3>Result:</h3>
+            <pre id="result-content"></pre>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const phraseTab = document.getElementById('phrase-tab');
+        const validateTab = document.getElementById('validate-tab');
+        const phraseForm = document.getElementById('phrase-form');
+        const validateForm = document.getElementById('validate-form');
+        const phraseInput = document.getElementById('phrase-input');
+        const jsonInput = document.getElementById('json-input');
+        const convertButton = document.getElementById('convert-button');
+        const validateButton = document.getElementById('validate-button');
+        const resultContainer = document.getElementById('result-container');
+        const resultContent = document.getElementById('result-content');
+        const errorMessage = document.getElementById('error-message');
+        const successMessage = document.getElementById('success-message');
+
+        // Tab switching
+        phraseTab.addEventListener('click', () => {
+            phraseTab.classList.add('active');
+            validateTab.classList.remove('active');
+            phraseForm.style.display = 'block';
+            validateForm.style.display = 'none';
+            clearResults();
+        });
+
+        validateTab.addEventListener('click', () => {
+            validateTab.classList.add('active');
+            phraseTab.classList.remove('active');
+            validateForm.style.display = 'block';
+            phraseForm.style.display = 'none';
+            clearResults();
+        });
+
+        // Function to detect if input is already valid JSON
+        function isValidJSON(text) {
+            try {
+                JSON.parse(text);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Function to convert phrase to JSON
+        function phraseToJson(phrase) {
+            try {
+                // First check if the input is already valid JSON
+                if (isValidJSON(phrase)) {
+                    // It's already JSON, just format it
+                    const parsed = JSON.parse(phrase);
+                    return JSON.stringify(parsed, null, 2);
+                }
+                
+                // Otherwise, process as comma-separated key-values
+                const parts = phrase.split(',').map(part => part.trim());
+                const result = {};
+                
+                parts.forEach(part => {
+                    if (part.includes(':')) {
+                        const [key, value] = part.split(':').map(item => item.trim());
+                        
+                        if (value.toLowerCase() === 'true') {
+                            result[key] = true;
+                        } else if (value.toLowerCase() === 'false') {
+                            result[key] = false;
+                        } else if (!isNaN(value) && value !== '') {
+                            result[key] = Number(value);
+                        } else {
+                            // Check if value already has quotes
+                            const hasQuotes = (value.startsWith('"') && value.endsWith('"')) || 
+                                           (value.startsWith("'") && value.endsWith("'"));
+                            
+                            if (hasQuotes) {
+                                // Remove existing quotes to store pure value
+                                result[key] = value.substring(1, value.length - 1);
+                            } else {
+                                // Store value as is, JSON.stringify will add quotes for strings
+                                result[key] = value;
+                            }
+                        }
+                    }
+                });
+                
+                // Format the JSON with proper indentation
+                let output = JSON.stringify(result, null, 2);
+                // Replace escaped quotes with regular quotes
+                output = output.replace(/\\"/g, '"');
+                return output;
+            } catch (err) {
+                throw new Error('Failed to convert phrase to JSON: ' + err.message);
+            }
+        }
+
+        // Function to validate JSON
+        function validateJson(jsonString) {
+            try {
+                const parsed = JSON.parse(jsonString);
+                return JSON.stringify(parsed, null, 2).replace(/\\\\/g, '\\').replace(/\\"/g, '"');
+            } catch (err) {
+                throw new Error('Invalid JSON: ' + err.message);
+            }
+        }
+
+        // Clear results and errors
+        function clearResults() {
+            resultContainer.style.display = 'none';
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+        }
+
+        // Show error
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            successMessage.style.display = 'none';
+            resultContainer.style.display = 'none';
+        }
+
+        // Show result
+        function showResult(resultText, isValid = false) {
+            resultContent.textContent = resultText;
+            resultContainer.style.display = 'block';
+            errorMessage.style.display = 'none';
+            
+            // Show success message for valid JSON
+            if (isValid) {
+                successMessage.style.display = 'block';
+            } else {
+                successMessage.style.display = 'none';
+            }
+        }
+
+        // Convert button click handler
+        convertButton.addEventListener('click', () => {
+            const phrase = phraseInput.value.trim();
+            
+            if (!phrase) {
+                showError('Please enter a phrase or valid JSON');
+                return;
+            }
+            
+            try {
+                const jsonResult = phraseToJson(phrase);
+                const isAlreadyValidJSON = isValidJSON(phrase);
+                
+                if (isAlreadyValidJSON) {
+                    showResult(jsonResult, true); // Show success message for valid JSON
+                } else {
+                    showResult(jsonResult); // No success message for phrase conversion
+                }
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+
+        // Validate button click handler
+        validateButton.addEventListener('click', () => {
+            const json = jsonInput.value.trim();
+            
+            if (!json) {
+                showError('Please enter JSON to validate');
+                return;
+            }
+            
+            try {
+                const validatedJson = validateJson(json);
+                showResult(validatedJson, true); // true indicates valid JSON
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+    </script>
+</body>
+</html>
