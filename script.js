@@ -181,9 +181,53 @@ function processJsonInput(input) {
             message: 'Valid JSON detected and formatted'
         };
     } catch (e) {
-        // If it looks like JSON but failed to parse, it's invalid JSON
+        // If it looks like JSON but failed to parse, provide detailed error
         if (looksLikeJson) {
-            throw new Error('Invalid JSON: ' + e.message);
+            // Get the error position and message
+            const errorMessage = e.message;
+            const position = errorMessage.match(/position (\d+)/);
+            const positionNum = position ? parseInt(position[1]) : -1;
+            
+            // Find what's missing or wrong
+            let suggestion = '';
+            if (positionNum >= 0) {
+                const problemChar = input.charAt(positionNum);
+                const lineNumber = input.substring(0, positionNum).split('\n').length;
+                const lineStart = input.lastIndexOf('\n', positionNum) + 1;
+                const lineEnd = input.indexOf('\n', positionNum);
+                const lineContent = input.substring(lineStart, lineEnd > -1 ? lineEnd : input.length);
+                const columnNumber = positionNum - lineStart + 1;
+                
+                // Create pointer to the error location
+                const pointer = ' '.repeat(columnNumber - 1) + '^ Error is here';
+                
+                // Common JSON error cases
+                if (errorMessage.includes('Unexpected token')) {
+                    if (problemChar === ':') {
+                        suggestion = 'Missing quotation marks around a property name?';
+                    } else if (problemChar === ',') {
+                        suggestion = 'Extra comma or missing property?';
+                    } else if (problemChar === '}' || problemChar === ']') {
+                        suggestion = 'Missing comma between properties?';
+                    }
+                } else if (errorMessage.includes('control character')) {
+                    suggestion = 'Missing closing quotation mark?';
+                } else if (errorMessage.includes('Expected property name')) {
+                    suggestion = 'Property name must be in double quotes.';
+                }
+                
+                // Format the detailed error message
+                const detailedError = `Invalid JSON at line ${lineNumber}, column ${columnNumber}: ${errorMessage}
+
+${lineContent}
+${pointer}
+
+Suggestion: ${suggestion || 'Check syntax near this position.'}`;
+                
+                throw new Error(detailedError);
+            } else {
+                throw new Error('Invalid JSON: ' + e.message);
+            }
         }
         
         // Not valid JSON, try to convert from phrase
