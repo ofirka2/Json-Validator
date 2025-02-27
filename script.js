@@ -1,395 +1,305 @@
-// DOM Elements
-const inputArea = document.getElementById('input-area');
-const processButton = document.getElementById('process-button');
-const clearButton = document.getElementById('clear-button');
-const resultContainer = document.getElementById('result-container');
-const resultContent = document.getElementById('result-content');
-const errorMessage = document.getElementById('error-message');
-const successMessage = document.getElementById('success-message');
-const copyButton = document.getElementById('copy-button');
+// DOM Utility Functions
+const DOM = {
+    elements: {
+        inputArea: document.getElementById('input-area'),
+        processButton: document.getElementById('process-button'),
+        clearButton: document.getElementById('clear-button'),
+        resultContainer: document.getElementById('result-container'),
+        resultContent: document.getElementById('result-content'),
+        errorMessage: document.getElementById('error-message'),
+        successMessage: document.getElementById('success-message'),
+        copyButton: document.getElementById('copy-button')
+    },
 
-// Clear button handler
-clearButton.addEventListener('click', () => {
-    inputArea.value = '';
-    clearResults();
-});
+    showElement(element, display = 'block') {
+        element.style.display = display;
+        element.classList.add('fade-in');
+    },
 
-// Function to detect if input is already valid JSON
-function isValidJSON(text) {
-    try {
-        JSON.parse(text);
-        return true;
-    } catch (e) {
-        return false;
+    hideElement(element) {
+        element.style.display = 'none';
     }
-}
+};
 
-// Helper function to split string at first colon
-function splitAtFirstColon(str) {
-    const colonIndex = str.indexOf(':');
-    return [str.substring(0, colonIndex), str.substring(colonIndex + 1)];
-}
-
-// Helper function to split by commas but respect brackets and braces
-function splitRespectingBrackets(input) {
-    const result = [];
-    let currentPart = '';
-    let bracketCount = 0;
-    let braceCount = 0;
-    let inQuotes = false;
-    let escape = false;
-    
-    for (let i = 0; i < input.length; i++) {
-        const char = input[i];
-        
-        if (escape) {
-            currentPart += char;
-            escape = false;
-            continue;
-        }
-        
-        if (char === '\\') {
-            currentPart += char;
-            escape = true;
-            continue;
-        }
-        
-        if (char === '"' && !escape) {
-            inQuotes = !inQuotes;
-            currentPart += char;
-            continue;
-        }
-        
-        if (inQuotes) {
-            currentPart += char;
-            continue;
-        }
-        
-        if (char === '[') {
-            bracketCount++;
-            currentPart += char;
-        } else if (char === ']') {
-            bracketCount--;
-            currentPart += char;
-        } else if (char === '{') {
-            braceCount++;
-            currentPart += char;
-        } else if (char === '}') {
-            braceCount--;
-            currentPart += char;
-        } else if (char === ',' && bracketCount === 0 && braceCount === 0) {
-            result.push(currentPart.trim());
-            currentPart = '';
-        } else {
-            currentPart += char;
-        }
-    }
-    
-    if (currentPart.trim()) {
-        result.push(currentPart.trim());
-    }
-    
-    return result;
-}
-
-// Helper function to parse different value types
-function parseValue(value) {
-    // Handle null, booleans, and numbers
-    if (value.toLowerCase() === 'null') {
-        return null;
-    } else if (value.toLowerCase() === 'true') {
-        return true;
-    } else if (value.toLowerCase() === 'false') {
-        return false;
-    } else if (!isNaN(value) && value !== '') {
-        return Number(value);
-    }
-    
-    // Handle arrays
-    if (value.startsWith('[') && value.endsWith(']')) {
+// JSON Processing Utilities
+const JsonUtils = {
+    isValidJSON(text) {
         try {
-            // Try to parse it as a JSON array
-            return JSON.parse(value);
-        } catch (e) {
-            // If that fails, do manual array parsing
-            const arrayContent = value.substring(1, value.length - 1).trim();
-            if (!arrayContent) return [];
-            
-            const items = splitRespectingBrackets(arrayContent);
-            return items.map(item => parseValue(item.trim()));
+            JSON.parse(text);
+            return true;
+        } catch {
+            return false;
         }
-    }
-    
-    // Handle nested objects
-    if (value.startsWith('{') && value.endsWith('}')) {
-        try {
-            // Try to parse it as a JSON object
-            return JSON.parse(value);
-        } catch (e) {
-            // If that fails, recursively process it
-            const objectContent = value.substring(1, value.length - 1).trim();
-            if (!objectContent) return {};
-            
-            const nestedResult = {};
-            const nestedParts = splitRespectingBrackets(objectContent);
-            
-            nestedParts.forEach(part => {
-                if (part.includes(':')) {
-                    let [nestedKey, nestedValue] = splitAtFirstColon(part);
-                    nestedKey = nestedKey.trim();
-                    nestedValue = nestedValue.trim();
-                    
-                    nestedResult[nestedKey] = parseValue(nestedValue);
-                }
-            });
-            
-            return nestedResult;
-        }
-    }
-    
-    // Handle quoted strings
-    if ((value.startsWith('"') && value.endsWith('"')) || 
-        (value.startsWith("'") && value.endsWith("'"))) {
-        return value.substring(1, value.length - 1);
-    }
-    
-    // Default case: return as string
-    return value;
-}
+    },
 
-// Unified process function that handles both conversion and validation
-function processJsonInput(input) {
-    input = input.trim();
-    
-    if (!input) {
-        throw new Error('Please enter JSON or a key-value phrase');
-    }
-    
-    // Check if input looks like JSON (starts with { or [)
-    const looksLikeJson = (input.startsWith('{') && input.endsWith('}')) || 
-                          (input.startsWith('[') && input.endsWith(']'));
-    
-    // First check if the input is already valid JSON
-    try {
-        // Try to parse as JSON
-        const parsed = JSON.parse(input);
-        
-        // Return the original input, just with proper formatting
-        return {
-            result: JSON.stringify(parsed, null, 2),
-            isValidJson: true,
-            message: 'Valid JSON detected and formatted'
-        };
-    } catch (e) {
-        // If it looks like JSON but failed to parse, provide detailed error
-        if (looksLikeJson) {
-            // Get the error position and message
-            const errorMessage = e.message;
-            const position = errorMessage.match(/position (\d+)/);
-            const positionNum = position ? parseInt(position[1]) : -1;
-            
-            // Find what's missing or wrong
-            let suggestion = '';
-            if (positionNum >= 0) {
-                const problemChar = input.charAt(positionNum);
-                const lineNumber = input.substring(0, positionNum).split('\n').length;
-                const lineStart = input.lastIndexOf('\n', positionNum) + 1;
-                const lineEnd = input.indexOf('\n', positionNum);
-                const lineContent = input.substring(lineStart, lineEnd > -1 ? lineEnd : input.length);
-                const columnNumber = positionNum - lineStart + 1;
+    splitAtFirstColon(str) {
+        const colonIndex = str.indexOf(':');
+        return [str.substring(0, colonIndex), str.substring(colonIndex + 1)];
+    },
+
+    splitRespectingBrackets(input) {
+        const result = [];
+        let currentPart = '';
+        let bracketCount = 0;
+        let braceCount = 0;
+        let inQuotes = false;
+        let escape = false;
+
+        for (const char of input) {
+            if (escape) {
+                currentPart += char;
+                escape = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                currentPart += char;
+                escape = true;
+                continue;
+            }
+
+            if (char === '"' && !escape) {
+                inQuotes = !inQuotes;
+                currentPart += char;
+                continue;
+            }
+
+            if (inQuotes) {
+                currentPart += char;
+                continue;
+            }
+
+            if (char === '[') bracketCount++;
+            else if (char === ']') bracketCount--;
+            else if (char === '{') braceCount++;
+            else if (char === '}') braceCount--;
+            else if (char === ',' && bracketCount === 0 && braceCount === 0) {
+                result.push(currentPart.trim());
+                currentPart = '';
+                continue;
+            }
+            currentPart += char;
+        }
+
+        if (currentPart.trim()) result.push(currentPart.trim());
+        return result;
+    },
+
+    parseValue(value) {
+        const trimmed = value.trim();
+        const lower = trimmed.toLowerCase();
+
+        if (lower === 'null') return null;
+        if (lower === 'true') return true;
+        if (lower === 'false') return false;
+        if (!isNaN(trimmed) && trimmed !== '') return Number(trimmed);
+
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            try {
+                return JSON.parse(trimmed);
+            } catch {
+                const content = trimmed.slice(1, -1).trim();
+                return content ? this.splitRespectingBrackets(content).map(item => this.parseValue(item.trim())) : [];
+            }
+        }
+
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+                return JSON.parse(trimmed);
+            } catch {
+                const content = trimmed.slice(1, -1).trim();
+                if (!content) return {};
                 
-                // Create pointer to the error location
-                const pointer = ' '.repeat(columnNumber - 1) + '^ Error is here';
-                
-                // Common JSON error cases
-                if (errorMessage.includes('Unexpected token')) {
-                    if (problemChar === ':') {
-                        suggestion = 'Missing quotation marks around a property name?';
-                    } else if (problemChar === ',') {
-                        suggestion = 'Extra comma or missing property?';
-                    } else if (problemChar === '}' || problemChar === ']') {
-                        suggestion = 'Missing comma between properties?';
+                const result = {};
+                this.splitRespectingBrackets(content).forEach(part => {
+                    if (part.includes(':')) {
+                        const [key, val] = this.splitAtFirstColon(part);
+                        result[key.trim()] = this.parseValue(val.trim());
                     }
-                } else if (errorMessage.includes('control character')) {
-                    suggestion = 'Missing closing quotation mark?';
-                } else if (errorMessage.includes('Expected property name')) {
-                    suggestion = 'Property name must be in double quotes.';
-                }
-                
-                // Format the detailed error message
-                const detailedError = `Invalid JSON at line ${lineNumber}, column ${columnNumber}: ${errorMessage}
-
-${lineContent}
-${pointer}
-
-Suggestion: ${suggestion || 'Check syntax near this position.'}`;
-                
-                throw new Error(detailedError);
-            } else {
-                throw new Error('Invalid JSON: ' + e.message);
+                });
+                return result;
             }
         }
-        
-        // Not valid JSON, try to convert from phrase
-        try {
-            // Process as comma-separated key-values
-            const result = {};
-            
-            // Split by commas but respect brackets and parentheses
-            const parts = splitRespectingBrackets(input);
-            
-            parts.forEach(part => {
-                // Check for key-value pairs (contains a colon)
-                if (part.includes(':')) {
-                    let [key, value] = splitAtFirstColon(part);
-                    key = key.trim();
-                    value = value.trim();
-                    
-                    // Handle different value types
-                    result[key] = parseValue(value);
-                }
-            });
-            
-            // Format the JSON with proper indentation
+
+        if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || 
+            (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+            return trimmed.slice(1, -1);
+        }
+
+        return trimmed;
+    }
+};
+
+// Main Application Logic
+const JsonConverter = {
+    processInput(input) {
+        const trimmedInput = input.trim();
+        if (!trimmedInput) throw new Error('Please enter JSON or a key-value phrase');
+
+        const isJsonLike = (trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) || 
+                          (trimmedInput.startsWith('[') && trimmedInput.endsWith(']'));
+
+        if (JsonUtils.isValidJSON(trimmedInput)) {
+            const parsed = JSON.parse(trimmedInput);
             return {
-                result: JSON.stringify(result, null, 2),
-                isValidJson: false,
-                message: 'Successfully converted phrase to JSON'
+                result: JSON.stringify(parsed, null, 2),
+                isValidJson: true,
+                message: 'Valid JSON detected and formatted'
             };
-        } catch (err) {
-            throw new Error('Could not process input: ' + err.message);
         }
-    }
-}
 
-// Function to syntax highlight JSON
-function syntaxHighlight(json) {
-    let result = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (isJsonLike) throw this.createDetailedJsonError(trimmedInput);
 
-    result = result.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-        let cls = 'json-number';
-        if (/^"/.test(match)) {
-            if (/:$/.test(match)) {
-                cls = 'json-key';
-            } else {
-                cls = 'json-string';
+        const result = {};
+        JsonUtils.splitRespectingBrackets(trimmedInput).forEach(part => {
+            if (part.includes(':')) {
+                const [key, value] = JsonUtils.splitAtFirstColon(part);
+                result[key.trim()] = JsonUtils.parseValue(value);
             }
-        } else if (/true|false/.test(match)) {
-            cls = 'json-boolean';
-        } else if (/null/.test(match)) {
-            cls = 'json-null';
-        }
-        return '<span class="' + cls + '">' + match + '</span>';
-    });
-    
-    result = result.replace(/([{}[\]])/g, '<span class="json-braces">$1</span>');
-    
-    return result;
-}
+        });
 
-// Clear results and errors
-function clearResults() {
-    resultContainer.style.display = 'none';
-    errorMessage.style.display = 'none';
-    successMessage.style.display = 'none';
-}
+        return {
+            result: JSON.stringify(result, null, 2),
+            isValidJson: false,
+            message: 'Successfully converted phrase to JSON'
+        };
+    },
 
-// Show error
-function showError(message) {
-    errorMessage.innerHTML = '<i class="fas fa-exclamation-circle"></i> ' + message;
-    errorMessage.style.display = 'block';
-    errorMessage.classList.add('fade-in');
-    successMessage.style.display = 'none';
-    resultContainer.style.display = 'none';
-}
-
-// Show result
-function showResult(resultText, isValid = false) {
-    // First, apply syntax highlighting
-    const highlightedText = syntaxHighlight(resultText);
-    
-    // Split the text by newlines and wrap each line in a span
-    const lines = highlightedText.split('\n');
-    const linesWithNumbers = lines.map(line => 
-        `<span class="line">${line}</span>`
-    ).join('\n');
-    
-    // Add the formatted text to the result container
-    resultContent.innerHTML = linesWithNumbers;
-    resultContainer.style.display = 'block';
-    errorMessage.style.display = 'none';
-    
-    // Show success message for valid JSON
-    if (isValid) {
-        successMessage.style.display = 'block';
-        successMessage.classList.add('fade-in');
-    } else {
-        successMessage.style.display = 'none';
-    }
-}
-
-// Process button click handler
-processButton.addEventListener('click', () => {
-    const input = inputArea.value;
-    
-    try {
-        const { result, isValidJson, message } = processJsonInput(input);
-        showResult(result, isValidJson);
-        
-        if (isValidJson || result) {
-            successMessage.innerHTML = '<i class="fas fa-check-circle"></i> ' + message;
-            successMessage.style.display = 'block';
-            successMessage.classList.add('fade-in');
-        }
-    } catch (err) {
-        showError(err.message);
-    }
-});
-
-// Copy to clipboard functionality
-copyButton.addEventListener('click', function() {
-    const textToCopy = resultContent.textContent;
-    
-    navigator.clipboard.writeText(textToCopy)
-        .then(() => {
-            const originalHTML = copyButton.innerHTML;
-            copyButton.innerHTML = '<i class="fas fa-check"></i>Copied!';
-            copyButton.style.backgroundColor = '#28a745';
+    createDetailedJsonError(input) {
+        try {
+            JSON.parse(input);
+        } catch (e) {
+            const positionMatch = e.message.match(/position (\d+)/);
+            const position = positionMatch ? parseInt(positionMatch[1]) : -1;
             
-            setTimeout(() => {
-                copyButton.innerHTML = originalHTML;
-                copyButton.style.backgroundColor = '';
-            }, 2000);
-        })
-        .catch(() => {
-            // Fallback for browsers that don't support clipboard API
+            if (position < 0) return new Error(`Invalid JSON: ${e.message}`);
+
+            const lines = input.substring(0, position).split('\n');
+            const lineNumber = lines.length;
+            const column = position - input.lastIndexOf('\n', position);
+            const lineStart = input.lastIndexOf('\n', position) + 1;
+            const lineEnd = input.indexOf('\n', position);
+            const line = input.substring(lineStart, lineEnd > -1 ? lineEnd : input.length);
+            
+            let suggestion = '';
+            const char = input.charAt(position);
+            if (e.message.includes('Unexpected token')) {
+                suggestion = char === ':' ? 'Missing quotation marks around a property name?' :
+                           char === ',' ? 'Extra comma or missing property?' :
+                           (char === '}' || char === ']') ? 'Missing comma between properties?' : '';
+            } else if (e.message.includes('control character')) {
+                suggestion = 'Missing closing quotation mark?';
+            } else if (e.message.includes('Expected property name')) {
+                suggestion = 'Property name must be in double quotes.';
+            }
+
+            return new Error(`Invalid JSON at line ${lineNumber}, column ${column}: ${e.message}\n\n${line}\n${' '.repeat(column - 1)}^ Error is here\n\nSuggestion: ${suggestion || 'Check syntax near this position.'}`);
+        }
+    },
+
+    syntaxHighlight(json) {
+        return json
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
+                const cls = /^"/.test(match) ? (/:$/.test(match) ? 'json-key' : 'json-string') :
+                           /true|false/.test(match) ? 'json-boolean' :
+                           /null/.test(match) ? 'json-null' : 'json-number';
+                return `<span class="${cls}">${match}</span>`;
+            })
+            .replace(/([{}[\]])/g, '<span class="json-braces">$1</span>')
+            .split('\n')
+            .map(line => `<span class="line">${line}</span>`)
+            .join('\n');
+    }
+};
+
+// UI Controller
+const UIController = {
+    clear() {
+        DOM.elements.inputArea.value = '';
+        DOM.hideElement(DOM.elements.resultContainer);
+        DOM.hideElement(DOM.elements.errorMessage);
+        DOM.hideElement(DOM.elements.successMessage);
+    },
+
+    showError(message) {
+        DOM.elements.errorMessage.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
+        DOM.showElement(DOM.elements.errorMessage);
+        DOM.hideElement(DOM.elements.successMessage);
+        DOM.hideElement(DOM.elements.resultContainer);
+    },
+
+    showResult(result, isValid, message) {
+        DOM.elements.resultContent.innerHTML = JsonConverter.syntaxHighlight(result);
+        DOM.showElement(DOM.elements.resultContainer);
+        DOM.hideElement(DOM.elements.errorMessage);
+        
+        if (isValid || result) {
+            DOM.elements.successMessage.innerHTML = `<i class="fas fa-check-circle"></i> ${message}`;
+            DOM.showElement(DOM.elements.successMessage);
+        }
+    },
+
+    async copyToClipboard() {
+        const text = DOM.elements.resultContent.textContent;
+        const button = DOM.elements.copyButton;
+        const originalHTML = button.innerHTML;
+
+        try {
+            await navigator.clipboard.writeText(text);
+            this.showCopySuccess(button, originalHTML);
+        } catch {
             const textarea = document.createElement('textarea');
-            textarea.value = textToCopy;
+            textarea.value = text;
             textarea.style.position = 'fixed';
             document.body.appendChild(textarea);
             textarea.select();
-            
+
             try {
                 document.execCommand('copy');
-                const originalHTML = copyButton.innerHTML;
-                copyButton.innerHTML = '<i class="fas fa-check"></i>Copied!';
-                copyButton.style.backgroundColor = '#28a745';
-                
-                setTimeout(() => {
-                    copyButton.innerHTML = originalHTML;
-                    copyButton.style.backgroundColor = '';
-                }, 2000);
+                this.showCopySuccess(button, originalHTML);
             } catch (err) {
-                console.error('Failed to copy', err);
+                console.error('Copy failed:', err);
             }
-            
             document.body.removeChild(textarea);
-        });
-});
+        }
+    },
 
-// Handle Enter key in textarea
-inputArea.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && e.ctrlKey) {
-        processButton.click();
+    showCopySuccess(button, originalHTML) {
+        button.innerHTML = '<i class="fas fa-check"></i>Copied!';
+        button.style.backgroundColor = '#28a745';
+        setTimeout(() => {
+            button.innerHTML = originalHTML;
+            button.style.backgroundColor = '';
+        }, 2000);
     }
-});
+};
+
+// Event Handlers
+const EventHandlers = {
+    init() {
+        DOM.elements.clearButton.addEventListener('click', () => UIController.clear());
+        
+        DOM.elements.processButton.addEventListener('click', () => {
+            try {
+                const { result, isValidJson, message } = JsonConverter.processInput(DOM.elements.inputArea.value);
+                UIController.showResult(result, isValidJson, message);
+            } catch (err) {
+                UIController.showError(err.message);
+            }
+        });
+
+        DOM.elements.copyButton.addEventListener('click', () => UIController.copyToClipboard());
+        
+        DOM.elements.inputArea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                DOM.elements.processButton.click();
+            }
+        });
+    }
+};
+
+// Initialize application
+EventHandlers.init();
