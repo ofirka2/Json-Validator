@@ -139,16 +139,23 @@ const JsonConverter = {
         const isJsonLike = (trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) || 
                           (trimmedInput.startsWith('[') && trimmedInput.endsWith(']'));
 
-        if (JsonUtils.isValidJSON(trimmedInput)) {
-            const parsed = JSON.parse(trimmedInput);
-            return {
-                result: JSON.stringify(parsed, null, 2),
-                isValidJson: true,
-                message: 'Valid JSON detected and formatted'
-            };
+        // First check for balanced brackets
+        if (!this.hasBalancedBrackets(trimmedInput)) {
+            throw this.createDetailedJsonError(trimmedInput);
         }
 
-        if (isJsonLike) throw this.createDetailedJsonError(trimmedInput);
+        if (isJsonLike) {
+            try {
+                const parsed = JSON.parse(trimmedInput);
+                return {
+                    result: JSON.stringify(parsed, null, 2),
+                    isValidJson: true,
+                    message: 'Valid JSON detected and formatted'
+                };
+            } catch (e) {
+                throw this.createDetailedJsonError(trimmedInput);
+            }
+        }
 
         const result = {};
         JsonUtils.splitRespectingBrackets(trimmedInput).forEach(part => {
@@ -164,7 +171,20 @@ const JsonConverter = {
             message: 'Successfully converted phrase to JSON'
         };
     },
-
+    hasBalancedBrackets(str) {
+        let stack = [];
+        for (let char of str) {
+            if (char === '{') stack.push('}');
+            else if (char === '[') stack.push(']');
+            else if (char === '(') stack.push(')');
+            else if (char === '}' || char === ']' || char === ')') {
+                if (stack.length === 0 || stack.pop() !== char) {
+                    return false;
+                }
+            }
+        }
+        return stack.length === 0;
+    },
     createDetailedJsonError(input) {
         try {
             JSON.parse(input);
