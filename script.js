@@ -3,6 +3,7 @@ const DOM = {
     elements: {
         inputArea: document.getElementById('input-area'),
         processButton: document.getElementById('process-button'),
+        excelButton: document.getElementById('excel-button'), // New button
         clearButton: document.getElementById('clear-button'),
         resultContainer: document.getElementById('result-container'),
         resultContent: document.getElementById('result-content'),
@@ -139,7 +140,6 @@ const JsonConverter = {
         const isJsonLike = (trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) || 
                           (trimmedInput.startsWith('[') && trimmedInput.endsWith(']'));
 
-        // First check for balanced brackets
         if (!this.hasBalancedBrackets(trimmedInput)) {
             throw this.createDetailedJsonError(trimmedInput);
         }
@@ -171,6 +171,62 @@ const JsonConverter = {
             message: 'Successfully converted phrase to JSON'
         };
     },
+
+    convertToExcel(input) {
+        const trimmedInput = input.trim();
+        if (!trimmedInput) throw new Error('Please enter JSON to convert to Excel');
+
+        let jsonData;
+        if (JsonUtils.isValidJSON(trimmedInput)) {
+            jsonData = JSON.parse(trimmedInput);
+        } else {
+            const result = {};
+            JsonUtils.splitRespectingBrackets(trimmedInput).forEach(part => {
+                if (part.includes(':')) {
+                    const [key, value] = JsonUtils.splitAtFirstColon(part);
+                    result[key.trim()] = JsonUtils.parseValue(value);
+                }
+            });
+            jsonData = result;
+        }
+
+        // Tab 1: Non-Array Values
+        const nonArrayData = [];
+        for (const [key, value] of Object.entries(jsonData)) {
+            if (!Array.isArray(value) && typeof value !== 'object') {
+                nonArrayData.push({ Key: key, Value: value });
+            }
+        }
+
+        // Tab 2: Server Topology
+        const serverTopologyData = [];
+        const topologyString = jsonData.serversTopology || '[]';
+        const topologyEntries = topologyString.slice(1, -1).split(',');
+        topologyEntries.forEach(entry => {
+            if (entry.trim()) {
+                const [mainPart, updated] = entry.split(':');
+                const [serverName, provider, status, type] = mainPart.split('-');
+                serverTopologyData.push({
+                    'Server Name': serverName,
+                    'Provider': provider,
+                    'Status': status,
+                    'Type': type,
+                    'Updated?': updated === '1' ? 'Yes' : 'No'
+                });
+            }
+        });
+
+        // Create Workbook
+        const wb = XLSX.utils.book_new();
+        const ws1 = XLSX.utils.json_to_sheet(nonArrayData);
+        XLSX.utils.book_append_sheet(wb, ws1, 'Non-Array Values');
+        const ws2 = XLSX.utils.json_to_sheet(serverTopologyData);
+        XLSX.utils.book_append_sheet(wb, ws2, 'Server Topology');
+
+        // Download Excel File
+        XLSX.writeFile(wb, 'converted_data.xlsx');
+    },
+
     hasBalancedBrackets(str) {
         let stack = [];
         for (let char of str) {
@@ -185,6 +241,7 @@ const JsonConverter = {
         }
         return stack.length === 0;
     },
+
     createDetailedJsonError(input) {
         try {
             JSON.parse(input);
@@ -262,6 +319,12 @@ const UIController = {
         }
     },
 
+    showExcelSuccess() {
+        DOM.elements.successMessage.innerHTML = `<i class="fas fa-check-circle"></i> Excel file generated successfully!`;
+        DOM.showElement(DOM.elements.successMessage);
+        DOM.hideElement(DOM.elements.errorMessage);
+    },
+
     async copyToClipboard() {
         const text = DOM.elements.resultContent.textContent;
         const button = DOM.elements.copyButton;
@@ -288,7 +351,7 @@ const UIController = {
     },
 
     showCopySuccess(button, originalHTML) {
-        button.innerHTML = '<i class="fas fa-check"></i>Copied!';
+        button.innerHTML = '<i class="fas fa-check"></i> Copied!';
         button.style.backgroundColor = '#28a745';
         setTimeout(() => {
             button.innerHTML = originalHTML;
@@ -306,6 +369,15 @@ const EventHandlers = {
             try {
                 const { result, isValidJson, message } = JsonConverter.processInput(DOM.elements.inputArea.value);
                 UIController.showResult(result, isValidJson, message);
+            } catch (err) {
+                UIController.showError(err.message);
+            }
+        });
+
+        DOM.elements.excelButton.addEventListener('click', () => {
+            try {
+                JsonConverter.convertToExcel(DOM.elements.inputArea.value);
+                UIController.showExcelSuccess();
             } catch (err) {
                 UIController.showError(err.message);
             }

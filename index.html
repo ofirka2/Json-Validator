@@ -6,6 +6,7 @@
     <title>JSON Toolbox</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -24,10 +25,13 @@
                 </div>
                 <div class="button-group">
                     <button class="button" id="process-button">
-                        <i class="fas fa-magic"></i>Process
+                        <i class="fas fa-magic"></i> Process
+                    </button>
+                    <button class="button" id="excel-button">
+                        <i class="fas fa-file-excel"></i> Convert to Excel
                     </button>
                     <button class="button clear-button" id="clear-button">
-                        <i class="fas fa-eraser"></i>Clear
+                        <i class="fas fa-eraser"></i> Clear
                     </button>
                 </div>
             </div>
@@ -41,7 +45,7 @@
                         <i class="fas fa-file-code"></i> Formatted Result
                     </h3>
                     <button class="button copy-button" id="copy-button">
-                        <i class="fas fa-copy"></i>Copy to Clipboard
+                        <i class="fas fa-copy"></i> Copy to Clipboard
                     </button>
                 </div>
                 <pre class="result-content" id="result-content"></pre>
