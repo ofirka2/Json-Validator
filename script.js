@@ -289,6 +289,123 @@ const JsonConverter = {
             .split('\n')
             .map(line => `<span class="line">${line}</span>`)
             .join('\n');
+    },
+
+    createInteractiveJson(data) {
+        // First, format JSON as string with proper indentation
+        const jsonString = JSON.stringify(data, null, 2);
+        const lines = jsonString.split('\n');
+        
+        // Track which lines are collapsible (start of objects/arrays)
+        const collapsibleLines = new Map(); // line index -> {id, type, openLine, closeLine}
+        const lineGroups = new Map(); // Track which lines belong to which group (excluding nested groups)
+        const idCounter = { count: 0 };
+        const stack = [];
+        
+        // First pass: find all object/array boundaries
+        lines.forEach((line, index) => {
+            const trimmed = line.trim();
+            // Check if line ends with { or [ (could be on same line as key, or standalone)
+            if (trimmed.endsWith('{') || trimmed.endsWith('[')) {
+                const id = `json-${idCounter.count++}`;
+                const isObject = trimmed.endsWith('{');
+                collapsibleLines.set(index, { id, type: isObject ? 'object' : 'array', openLine: index });
+                stack.push({ lineIndex: index, id, startIndex: index });
+            } 
+            // Check if line starts with } or ] (could be standalone or have content before)
+            else if (trimmed.startsWith('}') || trimmed.startsWith(']')) {
+                if (stack.length > 0) {
+                    const open = stack.pop();
+                    const lineInfo = collapsibleLines.get(open.lineIndex);
+                    if (lineInfo) {
+                        lineInfo.closeLine = index;
+                    }
+                }
+            }
+        });
+        
+        // Second pass: assign lines to groups, excluding nested sections
+        for (let [openIndex, lineInfo] of collapsibleLines.entries()) {
+            const closeIndex = lineInfo.closeLine;
+            if (closeIndex === undefined) continue;
+            
+            // Find all nested collapsible sections within this one
+            const nestedRanges = [];
+            for (let [nestedIndex, nestedInfo] of collapsibleLines.entries()) {
+                if (nestedIndex > openIndex && nestedIndex < closeIndex && nestedInfo.closeLine) {
+                    nestedRanges.push({ start: nestedIndex, end: nestedInfo.closeLine });
+                }
+            }
+            // Sort by start position
+            nestedRanges.sort((a, b) => a.start - b.start);
+            
+            // Mark lines that are not inside nested ranges
+            for (let i = openIndex + 1; i < closeIndex; i++) {
+                let isInNestedRange = false;
+                for (const range of nestedRanges) {
+                    if (i >= range.start && i <= range.end) {
+                        isInNestedRange = true;
+                        break;
+                    }
+                }
+                if (!isInNestedRange) {
+                    lineGroups.set(i, lineInfo.id);
+                }
+            }
+        }
+        
+        // Build HTML with line numbers and chevrons
+        return lines.map((line, index) => {
+            const lineInfo = collapsibleLines.get(index);
+            const isCollapsible = lineInfo && lineInfo.openLine === index;
+            const lineNum = index + 1;
+            const groupId = lineGroups.get(index);
+            
+            // Apply syntax highlighting
+            let highlightedLine = this.syntaxHighlightLine(line);
+            
+            if (isCollapsible) {
+                return `<div class="json-line json-collapsible-line" data-line="${lineNum}" data-group="${lineInfo.id}" data-open-line="${lineInfo.openLine}" data-close-line="${lineInfo.closeLine}">
+                    <span class="line-number">${lineNum}</span>
+                    <span class="line-toggle" data-target="${lineInfo.id}">
+                        <i class="fas fa-chevron-down"></i>
+                    </span>
+                    <span class="line-content">${highlightedLine}</span>
+                </div>`;
+            } else if (groupId) {
+                return `<div class="json-line json-grouped-line" data-line="${lineNum}" data-group="${groupId}">
+                    <span class="line-number">${lineNum}</span>
+                    <span class="line-toggle"></span>
+                    <span class="line-content">${highlightedLine}</span>
+                </div>`;
+            } else {
+                return `<div class="json-line" data-line="${lineNum}">
+                    <span class="line-number">${lineNum}</span>
+                    <span class="line-toggle"></span>
+                    <span class="line-content">${highlightedLine}</span>
+                </div>`;
+            }
+        }).join('');
+    },
+
+    syntaxHighlightLine(line) {
+        return line
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
+                const cls = /^"/.test(match) ? (/:$/.test(match) ? 'json-key' : 'json-string') :
+                           /true|false/.test(match) ? 'json-boolean' :
+                           /null/.test(match) ? 'json-null' : 'json-number';
+                return `<span class="${cls}">${match}</span>`;
+            })
+            .replace(/([{}[\]])/g, '<span class="json-braces">$1</span>');
+    },
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 };
 
@@ -309,7 +426,17 @@ const UIController = {
     },
 
     showResult(result, isValid, message) {
-        DOM.elements.resultContent.innerHTML = JsonConverter.syntaxHighlight(result);
+        try {
+            const jsonData = JSON.parse(result);
+            DOM.elements.resultContent.innerHTML = JsonConverter.createInteractiveJson(jsonData);
+            DOM.elements.resultContent.classList.remove('has-line-numbers');
+            this.attachCollapseHandlers();
+        } catch (e) {
+            // Fallback to syntax highlighting if parsing fails
+            DOM.elements.resultContent.innerHTML = JsonConverter.syntaxHighlight(result);
+            DOM.elements.resultContent.classList.add('has-line-numbers');
+        }
+        
         DOM.showElement(DOM.elements.resultContainer);
         DOM.hideElement(DOM.elements.errorMessage);
         
@@ -319,6 +446,83 @@ const UIController = {
         }
     },
 
+    attachCollapseHandlers() {
+        const toggleElement = (targetId) => {
+            const startLine = DOM.elements.resultContent.querySelector(`.json-collapsible-line[data-group="${targetId}"]`);
+            
+            if (!startLine) return;
+            
+            const openLineNum = parseInt(startLine.getAttribute('data-open-line'));
+            const closeLineNum = parseInt(startLine.getAttribute('data-close-line'));
+            const isCollapsed = startLine.classList.contains('collapsed');
+            
+            // Get all lines in the result container
+            const allLines = Array.from(DOM.elements.resultContent.querySelectorAll('.json-line'));
+            
+            // Build a map of nested collapsed sections for quick lookup
+            const nestedCollapsedRanges = [];
+            if (!isCollapsed) {
+                // When expanding, find all nested sections that are still collapsed
+                allLines.forEach(checkLine => {
+                    if (checkLine.classList.contains('json-collapsible-line') && 
+                        checkLine !== startLine &&
+                        checkLine.classList.contains('collapsed')) {
+                        const checkOpen = parseInt(checkLine.getAttribute('data-open-line'));
+                        const checkClose = parseInt(checkLine.getAttribute('data-close-line'));
+                        // Only include if it's within our range
+                        if (checkOpen > openLineNum && checkClose < closeLineNum) {
+                            nestedCollapsedRanges.push({ start: checkOpen, end: checkClose });
+                        }
+                    }
+                });
+            }
+            
+            // Hide/show all lines between open and close
+            for (let i = 0; i < allLines.length; i++) {
+                const line = allLines[i];
+                const lineNum = parseInt(line.getAttribute('data-line')) - 1; // Convert to 0-based index
+                
+                // Only process lines between open and close (excluding the closing brace)
+                if (lineNum > openLineNum && lineNum < closeLineNum) {
+                    // Check if this line is inside a nested collapsed section
+                    let insideNestedCollapsed = false;
+                    for (const range of nestedCollapsedRanges) {
+                        if (lineNum >= range.start && lineNum <= range.end) {
+                            insideNestedCollapsed = true;
+                            break;
+                        }
+                    }
+                    
+                    // Toggle visibility if not inside a nested collapsed section
+                    if (!insideNestedCollapsed) {
+                        line.style.display = isCollapsed ? '' : 'none';
+                    }
+                }
+            }
+            
+            // Update toggle icon
+            const toggle = startLine.querySelector('.line-toggle[data-target]');
+            if (toggle) {
+                const icon = toggle.querySelector('i');
+                if (icon) {
+                    icon.classList.toggle('fa-chevron-down', isCollapsed);
+                    icon.classList.toggle('fa-chevron-right', !isCollapsed);
+                }
+                startLine.classList.toggle('collapsed', !isCollapsed);
+            }
+        };
+        
+        // Attach handlers to toggle icons
+        const toggles = DOM.elements.resultContent.querySelectorAll('.line-toggle[data-target]');
+        toggles.forEach(toggle => {
+            toggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const targetId = toggle.getAttribute('data-target');
+                toggleElement(targetId);
+            });
+        });
+    },
+
     showExcelSuccess() {
         DOM.elements.successMessage.innerHTML = `<i class="fas fa-check-circle"></i> Excel file generated successfully!`;
         DOM.showElement(DOM.elements.successMessage);
@@ -326,7 +530,8 @@ const UIController = {
     },
 
     async copyToClipboard() {
-        const text = DOM.elements.resultContent.textContent;
+        // Get the text content, excluding the toggle icons
+        const text = DOM.elements.resultContent.textContent || DOM.elements.resultContent.innerText;
         const button = DOM.elements.copyButton;
         const originalHTML = button.innerHTML;
 

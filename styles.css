@@ -204,7 +204,12 @@ body {
     line-height: 1.5;
     max-height: 400px;
     overflow-y: auto;
+    overflow-x: auto;
     border: 1px solid var(--border-color);
+}
+
+.result-content.has-line-numbers {
+    padding-left: 3.5em;
 }
 
 .footer {
@@ -310,10 +315,13 @@ body {
     color: #0D47A1;
 }
 
-.result-content {
+.result-content.has-line-numbers {
     position: relative;
-    padding-left: 3.5em;  /* Make room for line numbers */
     counter-reset: line;
+}
+
+.result-content:not(.has-line-numbers) {
+    padding-left: 0;
 }
 
 .line {
@@ -334,6 +342,84 @@ body {
     border-right: 1px solid #ddd;
     padding-right: 0.5em;
     user-select: none;
+}
+
+/* Collapsible JSON styles - Postman-like layout */
+.json-line {
+    display: flex;
+    align-items: center;
+    min-height: 20px;
+    position: relative;
+    padding: 2px 0;
+}
+
+.json-line:hover {
+    background-color: rgba(67, 97, 238, 0.05);
+}
+
+.line-number {
+    display: inline-block;
+    width: 50px;
+    padding-right: 15px;
+    text-align: right;
+    color: #999;
+    font-size: 13px;
+    user-select: none;
+    flex-shrink: 0;
+    border-right: 1px solid #e0e0e0;
+    margin-right: 0;
+}
+
+.line-toggle {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+    color: #6c757d;
+    transition: color 0.15s ease;
+    padding: 2px 4px;
+    margin-right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.line-content {
+    flex: 1;
+    white-space: pre;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: visible;
+    word-break: normal;
+}
+
+.line-toggle:hover {
+    color: var(--primary-color);
+}
+
+.line-toggle i {
+    font-size: 10px;
+    display: inline-block;
+    line-height: 1;
+    opacity: 0.8;
+}
+
+.line-toggle:empty {
+    cursor: default;
+}
+
+.json-collapsible-line {
+    cursor: pointer;
+}
+
+.json-grouped-line {
+    display: flex;
+}
+
+.json-grouped-line[style*="display: none"] {
+    display: none !important;
 }
 
 
