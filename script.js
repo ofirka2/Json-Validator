@@ -313,7 +313,9 @@ const JsonConverter = {
                 stack.push({ lineIndex: index, id, startIndex: index });
             } 
             // Check if line starts with } or ] (could be standalone or have content before)
-            else if (trimmed.startsWith('}') || trimmed.startsWith(']')) {
+            // Also check if line contains } or ] at the start (after trimming)
+            else if (trimmed.startsWith('}') || trimmed.startsWith(']') || 
+                     (trimmed.length > 0 && (trimmed[0] === '}' || trimmed[0] === ']'))) {
                 if (stack.length > 0) {
                     const open = stack.pop();
                     const lineInfo = collapsibleLines.get(open.lineIndex);
@@ -355,9 +357,10 @@ const JsonConverter = {
         }
         
         // Build HTML with line numbers and chevrons
-        return lines.map((line, index) => {
+        const html = lines.map((line, index) => {
             const lineInfo = collapsibleLines.get(index);
-            const isCollapsible = lineInfo && lineInfo.openLine === index;
+            // Only mark as collapsible if it has a valid closeLine (was properly matched)
+            const isCollapsible = lineInfo && lineInfo.openLine === index && lineInfo.closeLine !== undefined;
             const lineNum = index + 1;
             const groupId = lineGroups.get(index);
             
@@ -386,6 +389,8 @@ const JsonConverter = {
                 </div>`;
             }
         }).join('');
+        
+        return html;
     },
 
     syntaxHighlightLine(line) {
@@ -460,42 +465,88 @@ const UIController = {
             const allLines = Array.from(DOM.elements.resultContent.querySelectorAll('.json-line'));
             
             // Build a map of nested collapsed sections for quick lookup
+            // CRITICAL: We need to find ALL nested collapsed objects, not just when expanding
+            // This ensures that when we collapse a parent, nested collapsed objects stay collapsed
             const nestedCollapsedRanges = [];
-            if (!isCollapsed) {
-                // When expanding, find all nested sections that are still collapsed
-                allLines.forEach(checkLine => {
-                    if (checkLine.classList.contains('json-collapsible-line') && 
-                        checkLine !== startLine &&
-                        checkLine.classList.contains('collapsed')) {
-                        const checkOpen = parseInt(checkLine.getAttribute('data-open-line'));
-                        const checkClose = parseInt(checkLine.getAttribute('data-close-line'));
-                        // Only include if it's within our range
-                        if (checkOpen > openLineNum && checkClose < closeLineNum) {
-                            nestedCollapsedRanges.push({ start: checkOpen, end: checkClose });
-                        }
+            allLines.forEach(checkLine => {
+                if (checkLine.classList.contains('json-collapsible-line') && 
+                    checkLine !== startLine &&
+                    checkLine.classList.contains('collapsed')) {
+                    const checkOpen = parseInt(checkLine.getAttribute('data-open-line'));
+                    const checkClose = parseInt(checkLine.getAttribute('data-close-line'));
+                    // Only include if it's within our range
+                    if (checkOpen > openLineNum && checkClose < closeLineNum) {
+                        nestedCollapsedRanges.push({ start: checkOpen, end: checkClose });
                     }
-                });
-            }
+                }
+            });
             
             // Hide/show all lines between open and close
+            // CRITICAL FIX: We must hide ALL lines between openLineNum and closeLineNum,
+            // including nested collapsible sections (which have their own group IDs)
+            
+            // Build a set of line numbers that should stay hidden (nested collapsed ranges)
+            // CRITICAL FIX: Always preserve nested collapsed objects, whether we're collapsing or expanding parent
+            const nestedCollapsedLineSet = new Set();
+            // When expanding parent, we need to keep nested collapsed objects hidden
+            // When collapsing parent, we hide everything anyway, but we still track nested ranges
+            // to ensure they stay collapsed when parent is expanded again
+            for (const range of nestedCollapsedRanges) {
+                // Include only nested CONTENT (exclude the opening line) so when we expand the parent
+                // we SHOW the nested object's row (e.g. "contract") but keep its content hidden
+                for (let lineIdx = range.start + 1; lineIdx <= range.end; lineIdx++) {
+                    nestedCollapsedLineSet.add(lineIdx);
+                }
+            }
+            
+            // More robust approach: iterate through all lines and check if they're in range
+            let linesProcessed = 0;
+            let linesHidden = 0;
+            let linesShown = 0;
+            let linesSkippedNested = 0;
+            let linesWithMissingData = 0;
+            
             for (let i = 0; i < allLines.length; i++) {
                 const line = allLines[i];
-                const lineNum = parseInt(line.getAttribute('data-line')) - 1; // Convert to 0-based index
+                const lineNumAttr = line.getAttribute('data-line');
                 
-                // Only process lines between open and close (excluding the closing brace)
-                if (lineNum > openLineNum && lineNum < closeLineNum) {
-                    // Check if this line is inside a nested collapsed section
-                    let insideNestedCollapsed = false;
-                    for (const range of nestedCollapsedRanges) {
-                        if (lineNum >= range.start && lineNum <= range.end) {
-                            insideNestedCollapsed = true;
-                            break;
-                        }
-                    }
+                if (!lineNumAttr) {
+                    linesWithMissingData++;
+                    continue; // Skip if no line number
+                }
+                
+                const lineNum = parseInt(lineNumAttr, 10);
+                if (isNaN(lineNum)) {
+                    linesWithMissingData++;
+                    continue; // Skip if invalid line number
+                }
+                
+                // Convert to 0-based index for comparison with openLineNum/closeLineNum
+                const lineNum0Based = lineNum - 1;
+                
+                // Only process lines between open and close (excluding the closing brace line itself)
+                // openLineNum and closeLineNum are already 0-based
+                if (lineNum0Based > openLineNum && lineNum0Based < closeLineNum) {
+                    linesProcessed++;
                     
-                    // Toggle visibility if not inside a nested collapsed section
-                    if (!insideNestedCollapsed) {
-                        line.style.display = isCollapsed ? '' : 'none';
+                    // Check if this line should stay hidden (inside a nested collapsed section)
+                    const shouldStayHidden = nestedCollapsedLineSet.has(lineNum0Based);
+                    
+                    if (shouldStayHidden) {
+                        // This line is inside a nested collapsed object - keep it hidden
+                        line.style.display = 'none';
+                        linesSkippedNested++;
+                    } else {
+                        // Toggle visibility for this line
+                        // isCollapsed=true means currently collapsed, so we're expanding (show lines)
+                        // isCollapsed=false means currently expanded, so we're collapsing (hide lines)
+                        const newDisplay = isCollapsed ? '' : 'none';
+                        line.style.display = newDisplay;
+                        if (newDisplay === 'none') {
+                            linesHidden++;
+                        } else {
+                            linesShown++;
+                        }
                     }
                 }
             }
@@ -530,8 +581,11 @@ const UIController = {
     },
 
     async copyToClipboard() {
-        // Get the text content, excluding the toggle icons
-        const text = DOM.elements.resultContent.textContent || DOM.elements.resultContent.innerText;
+        // Get JSON text without line numbers: use .line-content only (interactive view)
+        const lineContents = DOM.elements.resultContent.querySelectorAll('.line-content');
+        const text = lineContents.length > 0
+            ? Array.from(lineContents).map(el => el.textContent || '').join('\n')
+            : (DOM.elements.resultContent.textContent || DOM.elements.resultContent.innerText || '');
         const button = DOM.elements.copyButton;
         const originalHTML = button.innerHTML;
 
