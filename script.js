@@ -131,6 +131,55 @@ const JsonUtils = {
     }
 };
 
+// JSON Auto-Fixer
+const JsonFixer = {
+    tryParse(s) {
+        try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return null; }
+    },
+
+    applyBaseFixes(s) {
+        // Remove trailing commas before } or ]
+        s = s.replace(/,(\s*[}\]])/g, '$1');
+        // Quote unquoted object keys
+        s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
+        return s;
+    },
+
+    attemptFix(input) {
+        const base = this.applyBaseFixes(input.trim());
+
+        // Strategy 1: base fixes only
+        let result = this.tryParse(base);
+        if (result) return result;
+
+        // Strategy 2: replace ALL single quotes with double quotes
+        result = this.tryParse(base.replace(/'/g, '"'));
+        if (result) return result;
+
+        // Strategy 3: close unterminated strings at line ends ("value\n → "value"\n)
+        const lineClosed = base.replace(/"([^"\n]*)\n/g, '"$1"\n');
+        result = this.tryParse(lineClosed);
+        if (result) return result;
+
+        // Strategy 4: line-closed + single-quote swap
+        result = this.tryParse(lineClosed.replace(/'/g, '"'));
+        if (result) return result;
+
+        // Strategy 5: mismatched quote regex on base
+        const mismatch = base
+            .replace(/"([^"'\n]*?)'/g, '"$1"')
+            .replace(/'([^"'\n]*?)"/g, '"$1"');
+        result = this.tryParse(mismatch);
+        if (result) return result;
+
+        // Strategy 6: mismatch + line-close combined
+        result = this.tryParse(mismatch.replace(/"([^"\n]*)\n/g, '"$1"\n'));
+        if (result) return result;
+
+        return null;
+    }
+};
+
 // Main Application Logic
 const JsonConverter = {
     processInput(input) {
@@ -270,7 +319,7 @@ const JsonConverter = {
                 suggestion = 'Property name must be in double quotes.';
             }
 
-            return new Error(`Invalid JSON at line ${lineNumber}, column ${column}: ${e.message}\n\n${line}\n${' '.repeat(column - 1)}^ Error is here\n\nSuggestion: ${suggestion || 'Check syntax near this position.'}`);
+            return new Error(`Invalid JSON at line ${lineNumber}, column ${column}: ${e.message}\n\n${line}\n${' '.repeat(Math.max(0, column - 1))}^ Error is here\n\nSuggestion: ${suggestion || 'Check syntax near this position.'}`);
         }
     },
 
@@ -423,8 +472,19 @@ const UIController = {
         DOM.hideElement(DOM.elements.successMessage);
     },
 
-    showError(message) {
-        DOM.elements.errorMessage.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
+    showError(message, input = null) {
+        const lines = message.split('\n');
+        const firstLine = lines[0];
+        const rest = lines.slice(1).join('\n');
+        const detailHtml = rest
+            ? `<pre class="error-detail">${rest.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`
+            : '';
+        const fixPopup = input
+            ? `<div class="fix-popup"><button class="fix-btn" id="fix-json-btn"><i class="fas fa-wrench"></i> Fix it for me?</button></div>`
+            : '';
+        DOM.elements.errorMessage.innerHTML =
+            `<div class="error-main"><i class="fas fa-exclamation-circle"></i> ${firstLine}${detailHtml}</div>${fixPopup}`;
+        DOM.elements.errorMessage._fixInput = input;
         DOM.showElement(DOM.elements.errorMessage);
         DOM.hideElement(DOM.elements.successMessage);
         DOM.hideElement(DOM.elements.resultContainer);
@@ -629,7 +689,7 @@ const EventHandlers = {
                 const { result, isValidJson, message } = JsonConverter.processInput(DOM.elements.inputArea.value);
                 UIController.showResult(result, isValidJson, message);
             } catch (err) {
-                UIController.showError(err.message);
+                UIController.showError(err.message, DOM.elements.inputArea.value);
             }
         });
 
@@ -647,6 +707,19 @@ const EventHandlers = {
         DOM.elements.inputArea.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && e.ctrlKey) {
                 DOM.elements.processButton.click();
+            }
+        });
+
+        DOM.elements.errorMessage.addEventListener('click', (e) => {
+            if (!e.target.closest('#fix-json-btn')) return;
+            const input = DOM.elements.errorMessage._fixInput;
+            if (!input) return;
+            const fixed = JsonFixer.attemptFix(input);
+            if (fixed) {
+                DOM.elements.inputArea.value = fixed;
+                DOM.elements.processButton.click();
+            } else {
+                UIController.showError('Could not auto-fix the JSON. Please correct it manually.');
             }
         });
     }

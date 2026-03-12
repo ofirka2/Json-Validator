@@ -166,6 +166,58 @@ body {
     background-color: rgba(247, 37, 133, 0.1);
     color: var(--error-color);
     border-left: 4px solid var(--error-color);
+    position: relative;
+}
+
+.error-main {
+    display: block;
+}
+
+.error-detail {
+    margin-top: 8px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+    background: rgba(247, 37, 133, 0.06);
+    border-radius: 4px;
+    padding: 8px 10px;
+    color: inherit;
+    line-height: 1.5;
+}
+
+.fix-popup {
+    display: none;
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    z-index: 10;
+}
+
+#error-message:hover .fix-popup {
+    display: flex;
+}
+
+.fix-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: white;
+    color: var(--error-color);
+    border: 1.5px solid var(--error-color);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(247, 37, 133, 0.18);
+    transition: background 0.15s, color 0.15s;
+}
+
+.fix-btn:hover {
+    background: var(--error-color);
+    color: white;
 }
 
 .success {
