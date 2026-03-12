@@ -148,7 +148,18 @@ const JsonFixer = {
     },
 
     attemptFix(input) {
-        const base = this.applyBaseFixes(input.trim());
+        const trimmed = input.trim();
+
+        // Strategy 0: unescape escaped JSON (\"key\" → "key")
+        if (trimmed.includes('\\"')) {
+            const unescaped = trimmed.replace(/\\"/g, '"');
+            let result = this.tryParse(unescaped);
+            if (result) return result;
+            result = this.tryParse(this.applyBaseFixes(unescaped));
+            if (result) return result;
+        }
+
+        const base = this.applyBaseFixes(trimmed);
 
         // Strategy 1: base fixes only
         let result = this.tryParse(base);
@@ -188,7 +199,20 @@ const JsonConverter = {
         const trimmedInput = input.trim();
         if (!trimmedInput) throw new Error('Please enter JSON or a key-value phrase');
 
-        const isJsonLike = (trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) || 
+        // Auto-detect escaped JSON (\"key\":\"value\") and unescape silently
+        if (trimmedInput.includes('\\"')) {
+            const unescaped = trimmedInput.replace(/\\"/g, '"');
+            try {
+                const parsed = JSON.parse(unescaped);
+                return {
+                    result: JSON.stringify(parsed, null, 2),
+                    isValidJson: true,
+                    message: 'Escaped JSON detected — unescaped and formatted'
+                };
+            } catch {}
+        }
+
+        const isJsonLike = (trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) ||
                           (trimmedInput.startsWith('[') && trimmedInput.endsWith(']'));
 
         if (!this.hasBalancedBrackets(trimmedInput)) {
