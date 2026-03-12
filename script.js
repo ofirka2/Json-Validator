@@ -142,6 +142,8 @@ const JsonFixer = {
         s = s.replace(/,(\s*[}\]])/g, '$1');
         // Quote unquoted object keys
         s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
+        // Add missing commas: a value ending (string/number/bool/null/}/]) followed by newline then a new key/value
+        s = s.replace(/(["\d\]}\w])(\s*\n\s*)(")/g, '$1,$2$3');
         return s;
     },
 
