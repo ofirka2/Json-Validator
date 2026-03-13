@@ -9,7 +9,8 @@ const DOM = {
         resultContent: document.getElementById('result-content'),
         errorMessage: document.getElementById('error-message'),
         successMessage: document.getElementById('success-message'),
-        copyButton: document.getElementById('copy-button')
+        copyButton: document.getElementById('copy-button'),
+        viewToggleButton: document.getElementById('view-toggle-button')
     },
 
     showElement(element, display = 'block') {
@@ -486,7 +487,69 @@ const JsonConverter = {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    },
+
+    createFriendlyView(data, depth = 0) {
+        if (data === null) return `<span class="fv-null">null</span>`;
+
+        if (typeof data !== 'object') {
+            if (typeof data === 'boolean')
+                return `<span class="fv-badge ${data ? 'fv-badge-true' : 'fv-badge-false'}">${data ? 'Yes' : 'No'}</span>`;
+            if (typeof data === 'number')
+                return `<span class="fv-number">${data.toLocaleString()}</span>`;
+            return `<span class="fv-string">${this.escapeHtml(String(data))}</span>`;
+        }
+
+        if (Array.isArray(data)) {
+            if (data.length === 0) return `<em class="fv-empty">empty list</em>`;
+            const allPrimitive = data.every(item => item === null || typeof item !== 'object');
+            if (allPrimitive) {
+                return `<div class="fv-tags">${data.map(v =>
+                    `<span class="fv-tag">${this.escapeHtml(v === null ? 'null' : String(v))}</span>`
+                ).join('')}</div>`;
+            }
+            return `<div class="fv-array-list">${data.map((item, i) => `
+                <details class="fv-item-card" open>
+                    <summary class="fv-item-summary"><i class="fas fa-layer-group"></i> Item ${i + 1} <span style="font-weight:400;color:#718096;margin-left:4px">of ${data.length}</span></summary>
+                    <div class="fv-item-body">${this.createFriendlyView(item, depth + 1)}</div>
+                </details>`).join('')}
+            </div>`;
+        }
+
+        const entries = Object.entries(data);
+        if (entries.length === 0) return `<em class="fv-empty">empty</em>`;
+
+        return `<div class="fv-table${depth > 0 ? ' fv-table-nested' : ''}">
+            ${entries.map(([key, value]) => {
+                const isComplex = value !== null && typeof value === 'object';
+                const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+                const countLabel = isComplex
+                    ? (Array.isArray(value)
+                        ? `<i class="fas fa-list" style="margin-right:5px;opacity:0.6"></i>${value.length} item${value.length !== 1 ? 's' : ''}`
+                        : `<i class="fas fa-folder-open" style="margin-right:5px;opacity:0.6"></i>${Object.keys(value).length} field${Object.keys(value).length !== 1 ? 's' : ''}`)
+                    : '';
+                if (isComplex) {
+                    return `<div class="fv-row fv-row-complex">
+                        <span class="fv-key">${this.escapeHtml(label)}</span>
+                        <details class="fv-nested-details" ${depth < 2 ? 'open' : ''}>
+                            <summary class="fv-nested-summary">${countLabel}</summary>
+                            <div class="fv-nested-body">${this.createFriendlyView(value, depth + 1)}</div>
+                        </details>
+                    </div>`;
+                }
+                return `<div class="fv-row">
+                    <span class="fv-key">${this.escapeHtml(label)}</span>
+                    <span class="fv-val">${this.createFriendlyView(value, depth + 1)}</span>
+                </div>`;
+            }).join('')}
+        </div>`;
     }
+};
+
+// App State
+const AppState = {
+    currentJsonData: null,
+    viewMode: 'json' // 'json' | 'friendly'
 };
 
 // UI Controller
@@ -518,23 +581,49 @@ const UIController = {
 
     showResult(result, isValid, message) {
         try {
-            const jsonData = JSON.parse(result);
-            DOM.elements.resultContent.innerHTML = JsonConverter.createInteractiveJson(jsonData);
-            DOM.elements.resultContent.classList.remove('has-line-numbers');
-            this.attachCollapseHandlers();
+            AppState.currentJsonData = JSON.parse(result);
+            this.renderCurrentView();
         } catch (e) {
-            // Fallback to syntax highlighting if parsing fails
+            AppState.currentJsonData = null;
             DOM.elements.resultContent.innerHTML = JsonConverter.syntaxHighlight(result);
             DOM.elements.resultContent.classList.add('has-line-numbers');
+            DOM.elements.resultContent.classList.remove('fv-container');
         }
-        
+
         DOM.showElement(DOM.elements.resultContainer);
         DOM.hideElement(DOM.elements.errorMessage);
-        
+
         if (isValid || result) {
             DOM.elements.successMessage.innerHTML = `<i class="fas fa-check-circle"></i> ${message}`;
             DOM.showElement(DOM.elements.successMessage);
         }
+    },
+
+    renderCurrentView() {
+        if (!AppState.currentJsonData) return;
+        const el = DOM.elements.resultContent;
+        el.classList.remove('has-line-numbers');
+        if (AppState.viewMode === 'friendly') {
+            el.classList.add('fv-container');
+            el.innerHTML = JsonConverter.createFriendlyView(AppState.currentJsonData);
+        } else {
+            el.classList.remove('fv-container');
+            el.innerHTML = JsonConverter.createInteractiveJson(AppState.currentJsonData);
+            this.attachCollapseHandlers();
+        }
+    },
+
+    setViewMode(mode) {
+        AppState.viewMode = mode;
+        const btn = DOM.elements.viewToggleButton;
+        if (mode === 'friendly') {
+            btn.innerHTML = '<i class="fas fa-code"></i> JSON View';
+            btn.classList.add('active');
+        } else {
+            btn.innerHTML = '<i class="fas fa-table"></i> Friendly View';
+            btn.classList.remove('active');
+        }
+        this.renderCurrentView();
     },
 
     attachCollapseHandlers() {
@@ -667,11 +756,16 @@ const UIController = {
     },
 
     async copyToClipboard() {
-        // Get JSON text without line numbers: use .line-content only (interactive view)
-        const lineContents = DOM.elements.resultContent.querySelectorAll('.line-content');
-        const text = lineContents.length > 0
-            ? Array.from(lineContents).map(el => el.textContent || '').join('\n')
-            : (DOM.elements.resultContent.textContent || DOM.elements.resultContent.innerText || '');
+        // In friendly view, copy the formatted JSON from AppState; in JSON view strip line numbers
+        let text;
+        if (AppState.viewMode === 'friendly' && AppState.currentJsonData) {
+            text = JSON.stringify(AppState.currentJsonData, null, 2);
+        } else {
+            const lineContents = DOM.elements.resultContent.querySelectorAll('.line-content');
+            text = lineContents.length > 0
+                ? Array.from(lineContents).map(el => el.textContent || '').join('\n')
+                : (DOM.elements.resultContent.textContent || DOM.elements.resultContent.innerText || '');
+        }
         const button = DOM.elements.copyButton;
         const originalHTML = button.innerHTML;
 
@@ -729,6 +823,10 @@ const EventHandlers = {
         });
 
         DOM.elements.copyButton.addEventListener('click', () => UIController.copyToClipboard());
+
+        DOM.elements.viewToggleButton.addEventListener('click', () => {
+            UIController.setViewMode(AppState.viewMode === 'json' ? 'friendly' : 'json');
+        });
         
         DOM.elements.inputArea.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && e.ctrlKey) {
