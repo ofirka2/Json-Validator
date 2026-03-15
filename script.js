@@ -138,23 +138,87 @@ const JsonFixer = {
         try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return null; }
     },
 
+    // Pre-processing: strip wrappers and normalize before any repair
+    preProcess(s) {
+        // Strip fenced code blocks: ```json ... ``` or ``` ... ```
+        s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+        // Strip JSONP wrapper: callback({...}) or jQuery123({...})
+        s = s.replace(/^\s*[a-zA-Z_$][a-zA-Z0-9_$.]*\s*\((\s*[\[{][\s\S]*[\]}]\s*)\)\s*;?\s*$/, '$1').trim();
+
+        // Normalize smart/curly quotes to straight quotes
+        s = s.replace(/[\u201C\u201D\u275D\u275E\u301D\u301E\uFF02]/g, '"'); // curly double
+        s = s.replace(/[\u2018\u2019\u275B\u275C\u201A\u201B]/g, "'");       // curly single
+
+        // Strip JavaScript-style line comments (// ...) — avoid stripping inside strings
+        s = s.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*/g, (_, str) => str || '');
+
+        // Strip block comments (/* ... */) — avoid stripping inside strings
+        s = s.replace(/("(?:[^"\\]|\\.)*")|\/\*[\s\S]*?\*\//g, (_, str) => str || '');
+
+        return s.trim();
+    },
+
     applyBaseFixes(s) {
+        // Python literals → JSON equivalents
+        s = s.replace(/\bNone\b/g, 'null');
+        s = s.replace(/\bTrue\b/g, 'true');
+        s = s.replace(/\bFalse\b/g, 'false');
         // Remove trailing commas before } or ]
         s = s.replace(/,(\s*[}\]])/g, '$1');
         // Quote unquoted object keys
         s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
-        // Add missing commas: a value ending (string/number/bool/null/}/]) followed by newline then a new key/value
+        // Add missing commas: value end followed by newline then a new key/value
         s = s.replace(/(["\d\]}\w])(\s*\n\s*)(")/g, '$1,$2$3');
         return s;
     },
 
+    // Walks the string char-by-char and repairs:
+    //  - unclosed strings (closes them at newline or EOF)
+    //  - missing closing brackets/braces at EOF
+    closeAndRepair(s) {
+        let out = '';
+        const stack = [];
+        let inString = false, escape = false;
+        for (let i = 0; i < s.length; i++) {
+            const ch = s[i];
+            if (escape) { escape = false; out += ch; continue; }
+            if (ch === '\\' && inString) { escape = true; out += ch; continue; }
+            if (ch === '"') { inString = !inString; out += ch; continue; }
+            if (inString) {
+                // Newline or carriage return inside a string is invalid — close the string
+                if (ch === '\n' || ch === '\r') {
+                    out += '"';
+                    inString = false;
+                    out += ch;
+                } else {
+                    out += ch;
+                }
+                continue;
+            }
+            // Outside string
+            if (ch === '{') stack.push('}');
+            else if (ch === '[') stack.push(']');
+            else if ((ch === '}' || ch === ']') && stack.length) stack.pop();
+            out += ch;
+        }
+        if (inString) out += '"';          // close string at EOF
+        out += stack.reverse().join('');   // close missing brackets
+        return out;
+    },
+
     attemptFix(input) {
-        const trimmed = input.trim();
+        // Pre-process first: strip code fences, JSONP, normalize smart quotes, remove comments
+        const trimmed = this.preProcess(input.trim());
+
+        // Quick win: try after pre-processing alone
+        let result = this.tryParse(trimmed);
+        if (result) return result;
 
         // Strategy 0: unescape escaped JSON (\"key\" → "key")
         if (trimmed.includes('\\"')) {
             const unescaped = trimmed.replace(/\\"/g, '"');
-            let result = this.tryParse(unescaped);
+            result = this.tryParse(unescaped);
             if (result) return result;
             result = this.tryParse(this.applyBaseFixes(unescaped));
             if (result) return result;
@@ -163,31 +227,35 @@ const JsonFixer = {
         const base = this.applyBaseFixes(trimmed);
 
         // Strategy 1: base fixes only
-        let result = this.tryParse(base);
+        result = this.tryParse(base);
         if (result) return result;
 
         // Strategy 2: replace ALL single quotes with double quotes
         result = this.tryParse(base.replace(/'/g, '"'));
         if (result) return result;
 
-        // Strategy 3: close unterminated strings at line ends ("value\n → "value"\n)
-        const lineClosed = base.replace(/"([^"\n]*)\n/g, '"$1"\n');
-        result = this.tryParse(lineClosed);
+        // Strategy 3: structural repair (closes unclosed strings + missing brackets)
+        const repaired = this.closeAndRepair(trimmed);
+        result = this.tryParse(repaired);
         if (result) return result;
 
-        // Strategy 4: line-closed + single-quote swap
-        result = this.tryParse(lineClosed.replace(/'/g, '"'));
+        // Strategy 4: base fixes on structurally repaired
+        result = this.tryParse(this.applyBaseFixes(repaired));
         if (result) return result;
 
-        // Strategy 5: mismatched quote regex on base
+        // Strategy 5: single quotes on repaired
+        result = this.tryParse(repaired.replace(/'/g, '"'));
+        if (result) return result;
+
+        // Strategy 6: mismatched quote fix (e.g. "value' → "value")
         const mismatch = base
             .replace(/"([^"'\n]*?)'/g, '"$1"')
             .replace(/'([^"'\n]*?)"/g, '"$1"');
         result = this.tryParse(mismatch);
         if (result) return result;
 
-        // Strategy 6: mismatch + line-close combined
-        result = this.tryParse(mismatch.replace(/"([^"\n]*)\n/g, '"$1"\n'));
+        // Strategy 7: mismatch + structural repair combined
+        result = this.tryParse(this.closeAndRepair(mismatch));
         if (result) return result;
 
         return null;
@@ -324,29 +392,31 @@ const JsonConverter = {
         } catch (e) {
             const positionMatch = e.message.match(/position (\d+)/);
             const position = positionMatch ? parseInt(positionMatch[1]) : -1;
-            
-            if (position < 0) return new Error(`Invalid JSON: ${e.message}`);
+
+            if (position < 0) return new Error('Invalid JSON — check the syntax and try again.');
 
             const lines = input.substring(0, position).split('\n');
             const lineNumber = lines.length;
             const column = position - input.lastIndexOf('\n', position);
-            const lineStart = input.lastIndexOf('\n', position) + 1;
-            const lineEnd = input.indexOf('\n', position);
-            const line = input.substring(lineStart, lineEnd > -1 ? lineEnd : input.length);
-            
-            let suggestion = '';
             const char = input.charAt(position);
-            if (e.message.includes('Unexpected token')) {
-                suggestion = char === ':' ? 'Missing quotation marks around a property name?' :
-                           char === ',' ? 'Extra comma or missing property?' :
-                           (char === '}' || char === ']') ? 'Missing comma between properties?' : '';
-            } else if (e.message.includes('control character')) {
-                suggestion = 'Missing closing quotation mark?';
+
+            let what = '';
+            if (e.message.includes('Unexpected token') || e.message.includes('Unexpected non-whitespace')) {
+                what = char === ':' ? 'missing quotes around a property name' :
+                       char === ',' ? 'extra comma or missing value' :
+                       (char === '}' || char === ']') ? 'missing comma between properties' :
+                       char ? `unexpected character "${char}"` : 'unexpected end of input';
+            } else if (e.message.includes('control character') || e.message.includes('Bad string')) {
+                what = 'unclosed string (missing closing quote)';
             } else if (e.message.includes('Expected property name')) {
-                suggestion = 'Property name must be in double quotes.';
+                what = 'property name must be in double quotes';
+            } else if (e.message.includes('Unexpected end')) {
+                what = 'JSON is incomplete — missing closing brackets or braces';
+            } else {
+                what = 'syntax error';
             }
 
-            return new Error(`Invalid JSON at line ${lineNumber}, column ${column}: ${e.message}\n\n${line}\n${' '.repeat(Math.max(0, column - 1))}^ Error is here\n\nSuggestion: ${suggestion || 'Check syntax near this position.'}`);
+            return new Error(`Problem at line ${lineNumber}, column ${column} — ${what}.`);
         }
     },
 
