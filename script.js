@@ -624,16 +624,16 @@ const JsonConverter = {
             ${entries.map(([key, value]) => {
                 const isComplex = value !== null && typeof value === 'object';
                 const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
-                const countLabel = isComplex
+                const summaryIcon = isComplex
                     ? (Array.isArray(value)
-                        ? `<i class="fas fa-list" style="margin-right:5px;opacity:0.6"></i>${value.length} item${value.length !== 1 ? 's' : ''}`
-                        : `<i class="fas fa-folder-open" style="margin-right:5px;opacity:0.6"></i>${Object.keys(value).length} field${Object.keys(value).length !== 1 ? 's' : ''}`)
+                        ? `<i class="fas fa-list" style="margin-right:5px;opacity:0.6"></i>`
+                        : `<i class="fas fa-folder-open" style="margin-right:5px;opacity:0.6"></i>`)
                     : '';
                 if (isComplex) {
                     return `<div class="fv-row fv-row-complex">
                         <span class="fv-key">${this.escapeHtml(label)}</span>
                         <details class="fv-nested-details" ${depth < 2 ? 'open' : ''}>
-                            <summary class="fv-nested-summary">${countLabel}</summary>
+                            <summary class="fv-nested-summary">${summaryIcon}</summary>
                             <div class="fv-nested-body">${this.createFriendlyView(value, depth + 1)}</div>
                         </details>
                     </div>`;
