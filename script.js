@@ -170,7 +170,38 @@ const JsonFixer = {
         s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
         // Add missing commas: value end followed by newline then a new key/value
         s = s.replace(/(["\d\]}\w])(\s*\n\s*)(")/g, '$1,$2$3');
+        // Fix missing colon between key and value: "key" value → "key": value
+        // Uses a lookahead for the value start so it's not consumed by the match
+        const valLookahead = '(?=(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d|true|false|null|\\{|\\[))';
+        s = s.replace(
+            new RegExp('([{,]\\s*"[^"]*")(\\s+)(?!:)' + valLookahead, 'g'),
+            '$1:$2'
+        );
+        // Fix missing opening bracket for bare array values:
+        // "key": val1, val2  (val2 is not "key": pattern) → "key": [val1, val2]
+        // Walk through and collect consecutive non-key values after a colon
+        s = this._fixMissingArrayBrackets(s);
         return s;
+    },
+
+    // Detects: ": value, value, ..." where subsequent values have no key,
+    // and wraps them in [ ... ]
+    _fixMissingArrayBrackets(s) {
+        // Pattern: after ": " we have value, value (where the next "value" is NOT "key":)
+        // We handle this with a targeted regex for the most common case:
+        // ": primitiveOrString, primitiveOrString" at object level
+        const prim = '(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|null)';
+        // Detects ": val, val" where val2 is not followed by ":"
+        // Replace with ": [val, val"  — close bracket added by closeAndRepair or below
+        const re = new RegExp(
+            '(:\\s*)(' + prim + ')((?:\\s*,\\s*' + prim + ')+)(\\s*[,}\\]])',
+            'g'
+        );
+        return s.replace(re, (match, colon, first, rest, tail) => {
+            // Only wrap if rest contains values without keys (no "key": pattern inside)
+            if (/"\s*:/.test(rest)) return match; // has key:value, skip
+            return `${colon}[${first}${rest}]${tail}`;
+        });
     },
 
     // Walks the string char-by-char and repairs:
