@@ -3,14 +3,24 @@ const DOM = {
     elements: {
         inputArea: document.getElementById('input-area'),
         processButton: document.getElementById('process-button'),
-        excelButton: document.getElementById('excel-button'), // New button
+        excelButton: document.getElementById('excel-button'),
         clearButton: document.getElementById('clear-button'),
         resultContainer: document.getElementById('result-container'),
         resultContent: document.getElementById('result-content'),
         errorMessage: document.getElementById('error-message'),
         successMessage: document.getElementById('success-message'),
         copyButton: document.getElementById('copy-button'),
-        viewToggleButton: document.getElementById('view-toggle-button')
+        viewToggleButton: document.getElementById('view-toggle-button'),
+        // Schema tab
+        schemaJsonArea: document.getElementById('schema-json-area'),
+        schemaArea: document.getElementById('schema-area'),
+        schemaValidateBtn: document.getElementById('schema-validate-btn'),
+        schemaClearBtn: document.getElementById('schema-clear-btn'),
+        schemaResultArea: document.getElementById('schema-result-area'),
+        loadSchemaExample: document.getElementById('load-schema-example'),
+        tabBtns: document.querySelectorAll('.tab-btn'),
+        tabFormat: document.getElementById('tab-format'),
+        tabSchema: document.getElementById('tab-schema'),
     },
 
     showElement(element, display = 'block') {
@@ -647,6 +657,185 @@ const JsonConverter = {
     }
 };
 
+// JSON Schema Validator
+const SchemaValidator = {
+    validate(data, schema) {
+        const errors = [];
+        const defs = Object.assign({}, schema.$defs, schema.definitions);
+        this._validate(data, schema, '', errors, defs);
+        return errors;
+    },
+
+    _validate(data, schema, path, errors, defs) {
+        if (!schema || typeof schema !== 'object') return;
+
+        // Merge in any new $defs / definitions
+        if (schema.$defs) Object.assign(defs, schema.$defs);
+        if (schema.definitions) Object.assign(defs, schema.definitions);
+
+        // $ref resolution
+        if (schema.$ref) {
+            const ref = schema.$ref;
+            let refSchema = null;
+            if (ref.startsWith('#/$defs/')) refSchema = defs[ref.slice('#/$defs/'.length)];
+            else if (ref.startsWith('#/definitions/')) refSchema = defs[ref.slice('#/definitions/'.length)];
+            if (refSchema) this._validate(data, refSchema, path, errors, defs);
+            return;
+        }
+
+        const loc = path || '(root)';
+
+        // type
+        if (schema.type !== undefined) {
+            const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+            if (!types.some(t => this._checkType(data, t))) {
+                errors.push({ path: loc, message: `must be of type ${types.join(' or ')}` });
+                return;
+            }
+        }
+
+        // enum / const
+        if (schema.enum !== undefined) {
+            if (!schema.enum.some(v => JSON.stringify(v) === JSON.stringify(data)))
+                errors.push({ path: loc, message: `must be one of: ${schema.enum.map(v => JSON.stringify(v)).join(', ')}` });
+        }
+        if (schema.const !== undefined) {
+            if (JSON.stringify(data) !== JSON.stringify(schema.const))
+                errors.push({ path: loc, message: `must equal ${JSON.stringify(schema.const)}` });
+        }
+
+        // String keywords
+        if (typeof data === 'string') {
+            if (schema.minLength !== undefined && data.length < schema.minLength)
+                errors.push({ path: loc, message: `must be at least ${schema.minLength} characters long` });
+            if (schema.maxLength !== undefined && data.length > schema.maxLength)
+                errors.push({ path: loc, message: `must be at most ${schema.maxLength} characters long` });
+            if (schema.pattern !== undefined) {
+                try { if (!new RegExp(schema.pattern).test(data)) errors.push({ path: loc, message: `must match pattern "${schema.pattern}"` }); }
+                catch {}
+            }
+            if (schema.format !== undefined) {
+                const msg = this._checkFormat(data, schema.format);
+                if (msg) errors.push({ path: loc, message: msg });
+            }
+        }
+
+        // Number keywords
+        if (typeof data === 'number') {
+            if (schema.minimum !== undefined && data < schema.minimum)
+                errors.push({ path: loc, message: `must be >= ${schema.minimum}` });
+            if (schema.maximum !== undefined && data > schema.maximum)
+                errors.push({ path: loc, message: `must be <= ${schema.maximum}` });
+            if (schema.exclusiveMinimum !== undefined && data <= schema.exclusiveMinimum)
+                errors.push({ path: loc, message: `must be > ${schema.exclusiveMinimum}` });
+            if (schema.exclusiveMaximum !== undefined && data >= schema.exclusiveMaximum)
+                errors.push({ path: loc, message: `must be < ${schema.exclusiveMaximum}` });
+            if (schema.multipleOf !== undefined && data % schema.multipleOf !== 0)
+                errors.push({ path: loc, message: `must be a multiple of ${schema.multipleOf}` });
+        }
+
+        // Object keywords
+        if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+            if (Array.isArray(schema.required)) {
+                for (const key of schema.required) {
+                    if (!(key in data))
+                        errors.push({ path: path ? `${path}/${key}` : key, message: `required property is missing` });
+                }
+            }
+            if (schema.properties) {
+                for (const [key, sub] of Object.entries(schema.properties)) {
+                    if (key in data) this._validate(data[key], sub, path ? `${path}/${key}` : key, errors, defs);
+                }
+            }
+            if (schema.additionalProperties === false && schema.properties) {
+                const allowed = new Set(Object.keys(schema.properties));
+                for (const key of Object.keys(data)) {
+                    if (!allowed.has(key))
+                        errors.push({ path: path ? `${path}/${key}` : key, message: `additional property is not allowed` });
+                }
+            } else if (schema.additionalProperties && typeof schema.additionalProperties === 'object' && schema.properties) {
+                const allowed = new Set(Object.keys(schema.properties));
+                for (const key of Object.keys(data)) {
+                    if (!allowed.has(key))
+                        this._validate(data[key], schema.additionalProperties, path ? `${path}/${key}` : key, errors, defs);
+                }
+            }
+            const numProps = Object.keys(data).length;
+            if (schema.minProperties !== undefined && numProps < schema.minProperties)
+                errors.push({ path: loc, message: `must have at least ${schema.minProperties} properties` });
+            if (schema.maxProperties !== undefined && numProps > schema.maxProperties)
+                errors.push({ path: loc, message: `must have at most ${schema.maxProperties} properties` });
+        }
+
+        // Array keywords
+        if (Array.isArray(data)) {
+            if (schema.minItems !== undefined && data.length < schema.minItems)
+                errors.push({ path: loc, message: `must have at least ${schema.minItems} items` });
+            if (schema.maxItems !== undefined && data.length > schema.maxItems)
+                errors.push({ path: loc, message: `must have at most ${schema.maxItems} items` });
+            if (schema.uniqueItems && data.length !== new Set(data.map(v => JSON.stringify(v))).size)
+                errors.push({ path: loc, message: `must have unique items` });
+            if (schema.items) {
+                if (Array.isArray(schema.items)) {
+                    schema.items.forEach((sub, i) => { if (i < data.length) this._validate(data[i], sub, `${path}/${i}`, errors, defs); });
+                } else {
+                    data.forEach((item, i) => this._validate(item, schema.items, `${path}/${i}`, errors, defs));
+                }
+            }
+        }
+
+        // Logical combinators
+        if (schema.allOf) {
+            for (const sub of schema.allOf) this._validate(data, sub, path, errors, defs);
+        }
+        if (schema.anyOf) {
+            const valid = schema.anyOf.some(sub => { const e = []; this._validate(data, sub, path, e, defs); return e.length === 0; });
+            if (!valid) errors.push({ path: loc, message: `must match at least one of the allowed schemas` });
+        }
+        if (schema.oneOf) {
+            const count = schema.oneOf.filter(sub => { const e = []; this._validate(data, sub, path, e, defs); return e.length === 0; }).length;
+            if (count !== 1) errors.push({ path: loc, message: `must match exactly one of the allowed schemas (matched ${count})` });
+        }
+        if (schema.not) {
+            const e = []; this._validate(data, schema.not, path, e, defs);
+            if (e.length === 0) errors.push({ path: loc, message: `must not match the "not" schema` });
+        }
+        if (schema.if) {
+            const e = []; this._validate(data, schema.if, path, e, defs);
+            if (e.length === 0 && schema.then) this._validate(data, schema.then, path, errors, defs);
+            else if (e.length > 0 && schema.else) this._validate(data, schema.else, path, errors, defs);
+        }
+    },
+
+    _checkType(data, type) {
+        switch (type) {
+            case 'null':    return data === null;
+            case 'boolean': return typeof data === 'boolean';
+            case 'integer': return typeof data === 'number' && Number.isInteger(data);
+            case 'number':  return typeof data === 'number';
+            case 'string':  return typeof data === 'string';
+            case 'array':   return Array.isArray(data);
+            case 'object':  return data !== null && typeof data === 'object' && !Array.isArray(data);
+            default:        return true;
+        }
+    },
+
+    _checkFormat(data, format) {
+        const checks = {
+            'date-time': [/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/, 'must be a valid date-time (ISO 8601)'],
+            'date':      [/^\d{4}-\d{2}-\d{2}$/, 'must be a valid date (YYYY-MM-DD)'],
+            'time':      [/^\d{2}:\d{2}:\d{2}$/, 'must be a valid time (HH:MM:SS)'],
+            'email':     [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'must be a valid email address'],
+            'uri':       [/^[a-zA-Z][a-zA-Z0-9+\-.]*:/, 'must be a valid URI'],
+            'ipv4':      [/^(\d{1,3}\.){3}\d{1,3}$/, 'must be a valid IPv4 address'],
+            'uuid':      [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'must be a valid UUID'],
+        };
+        const check = checks[format];
+        if (!check) return null;
+        return check[0].test(data) ? null : check[1];
+    }
+};
+
 // App State
 const AppState = {
     currentJsonData: null,
@@ -900,9 +1089,107 @@ const UIController = {
     }
 };
 
+// Schema UI Controller
+const SchemaUI = {
+    EXAMPLE_JSON: JSON.stringify({
+        name: "Alice",
+        age: 28,
+        email: "alice@example.com",
+        role: "admin",
+        scores: [95, 87, 100]
+    }, null, 2),
+
+    EXAMPLE_SCHEMA: JSON.stringify({
+        type: "object",
+        required: ["name", "age", "email"],
+        properties: {
+            name:   { type: "string", minLength: 1 },
+            age:    { type: "integer", minimum: 0, maximum: 120 },
+            email:  { type: "string", format: "email" },
+            role:   { type: "string", enum: ["admin", "user", "guest"] },
+            scores: { type: "array", items: { type: "number" }, minItems: 1 }
+        },
+        additionalProperties: false
+    }, null, 2),
+
+    run() {
+        const jsonRaw = DOM.elements.schemaJsonArea.value.trim();
+        const schemaRaw = DOM.elements.schemaArea.value.trim();
+        const area = DOM.elements.schemaResultArea;
+
+        if (!jsonRaw || !schemaRaw) {
+            area.style.display = 'block';
+            area.innerHTML = `<div class="schema-parse-error"><strong>Missing input.</strong> Please provide both JSON data and a JSON Schema.</div>`;
+            return;
+        }
+
+        let data, schema;
+        try { data = JSON.parse(jsonRaw); }
+        catch (e) {
+            area.style.display = 'block';
+            area.innerHTML = `<div class="schema-parse-error"><strong>Invalid JSON data:</strong> ${this._esc(e.message)}</div>`;
+            return;
+        }
+        try { schema = JSON.parse(schemaRaw); }
+        catch (e) {
+            area.style.display = 'block';
+            area.innerHTML = `<div class="schema-parse-error"><strong>Invalid JSON Schema:</strong> ${this._esc(e.message)}</div>`;
+            return;
+        }
+
+        const errors = SchemaValidator.validate(data, schema);
+        area.style.display = 'block';
+
+        if (errors.length === 0) {
+            area.innerHTML = `<div class="schema-valid-banner"><i class="fas fa-check-circle"></i> Valid — JSON matches the schema perfectly.</div>`;
+        } else {
+            const items = errors.map(err =>
+                `<li class="schema-error-item">
+                    <span class="schema-error-path">${this._esc(err.path)}</span>
+                    <span class="schema-error-msg">${this._esc(err.message)}</span>
+                </li>`
+            ).join('');
+            area.innerHTML = `
+                <div class="schema-error-banner"><i class="fas fa-times-circle"></i> ${errors.length} validation error${errors.length > 1 ? 's' : ''} found</div>
+                <ul class="schema-error-list">${items}</ul>`;
+        }
+    },
+
+    clear() {
+        DOM.elements.schemaJsonArea.value = '';
+        DOM.elements.schemaArea.value = '';
+        DOM.elements.schemaResultArea.style.display = 'none';
+        DOM.elements.schemaResultArea.innerHTML = '';
+    },
+
+    _esc(str) {
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+};
+
 // Event Handlers
 const EventHandlers = {
     init() {
+        // Tab switching
+        DOM.elements.tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                DOM.elements.tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.tab;
+                DOM.elements.tabFormat.style.display = tab === 'format' ? '' : 'none';
+                DOM.elements.tabSchema.style.display = tab === 'schema' ? '' : 'none';
+            });
+        });
+
+        // Schema tab actions
+        DOM.elements.schemaValidateBtn.addEventListener('click', () => SchemaUI.run());
+        DOM.elements.schemaClearBtn.addEventListener('click', () => SchemaUI.clear());
+        DOM.elements.loadSchemaExample.addEventListener('click', () => {
+            DOM.elements.schemaJsonArea.value = SchemaUI.EXAMPLE_JSON;
+            DOM.elements.schemaArea.value = SchemaUI.EXAMPLE_SCHEMA;
+            DOM.elements.schemaResultArea.style.display = 'none';
+        });
+
         DOM.elements.clearButton.addEventListener('click', () => UIController.clear());
         
         DOM.elements.processButton.addEventListener('click', () => {

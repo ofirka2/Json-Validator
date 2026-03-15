@@ -16,44 +16,85 @@
         </header>
         
         <main class="card">
-            <div id="unified-form">
-                <div class="input-group">
-                    <label class="input-label" for="input-area">
-                        <i class="fas fa-code"></i> Enter JSON or Phrase
-                    </label>
-                    <textarea class="textarea" id="input-area" placeholder="Enter valid JSON or key-value pairs like:&#10;name: John, age: 30, hobbies: [reading, gaming, hiking]&#10;&#10;Or paste JSON like:&#10;{&#10;  &quot;name&quot;: &quot;John&quot;,&#10;  &quot;age&quot;: 30,&#10;  &quot;hobbies&quot;: [&quot;reading&quot;, &quot;gaming&quot;, &quot;hiking&quot;]&#10;}"></textarea>
-                </div>
-                <div class="button-group">
-                    <button class="button" id="process-button">
-                        <i class="fas fa-magic"></i> Process
-                    </button>
-                    <button class="button" id="excel-button">
-                        <i class="fas fa-file-excel"></i> Convert to Excel
-                    </button>
-                    <button class="button clear-button" id="clear-button">
-                        <i class="fas fa-eraser"></i> Clear
-                    </button>
-                </div>
+            <!-- Tab Navigation -->
+            <div class="tab-nav">
+                <button class="tab-btn active" data-tab="format">
+                    <i class="fas fa-magic"></i> Format &amp; Fix
+                </button>
+                <button class="tab-btn" data-tab="schema">
+                    <i class="fas fa-check-double"></i> Schema Validate
+                </button>
             </div>
-            
-            <div class="message error" id="error-message"></div>
-            <div class="message success" id="success-message"></div>
-            
-            <div class="result-container" id="result-container">
-                <div class="result-header">
-                    <h3 class="result-title">
-                        <i class="fas fa-file-code"></i> Formatted Result
-                    </h3>
-                    <div class="result-header-actions">
-                        <button class="button view-toggle-btn" id="view-toggle-button">
-                            <i class="fas fa-table"></i> Friendly View
+
+            <!-- Format & Fix Tab -->
+            <div class="tab-pane" id="tab-format">
+                <div id="unified-form">
+                    <div class="input-group">
+                        <label class="input-label" for="input-area">
+                            <i class="fas fa-code"></i> Enter JSON or Phrase
+                        </label>
+                        <textarea class="textarea" id="input-area" placeholder="Enter valid JSON or key-value pairs like:&#10;name: John, age: 30, hobbies: [reading, gaming, hiking]&#10;&#10;Or paste JSON like:&#10;{&#10;  &quot;name&quot;: &quot;John&quot;,&#10;  &quot;age&quot;: 30,&#10;  &quot;hobbies&quot;: [&quot;reading&quot;, &quot;gaming&quot;, &quot;hiking&quot;]&#10;}"></textarea>
+                    </div>
+                    <div class="button-group">
+                        <button class="button" id="process-button">
+                            <i class="fas fa-magic"></i> Process
                         </button>
-                        <button class="button copy-button" id="copy-button">
-                            <i class="fas fa-copy"></i> Copy to Clipboard
+                        <button class="button" id="excel-button">
+                            <i class="fas fa-file-excel"></i> Convert to Excel
+                        </button>
+                        <button class="button clear-button" id="clear-button">
+                            <i class="fas fa-eraser"></i> Clear
                         </button>
                     </div>
                 </div>
-                <div class="result-content" id="result-content"></div>
+
+                <div class="message error" id="error-message"></div>
+                <div class="message success" id="success-message"></div>
+
+                <div class="result-container" id="result-container">
+                    <div class="result-header">
+                        <h3 class="result-title">
+                            <i class="fas fa-file-code"></i> Formatted Result
+                        </h3>
+                        <div class="result-header-actions">
+                            <button class="button view-toggle-btn" id="view-toggle-button">
+                                <i class="fas fa-table"></i> Friendly View
+                            </button>
+                            <button class="button copy-button" id="copy-button">
+                                <i class="fas fa-copy"></i> Copy to Clipboard
+                            </button>
+                        </div>
+                    </div>
+                    <div class="result-content" id="result-content"></div>
+                </div>
+            </div>
+
+            <!-- Schema Validate Tab -->
+            <div class="tab-pane" id="tab-schema" style="display:none">
+                <div class="schema-panels">
+                    <div class="input-group">
+                        <label class="input-label" for="schema-json-area">
+                            <i class="fas fa-code"></i> JSON Data
+                        </label>
+                        <textarea class="textarea" id="schema-json-area" placeholder='Paste the JSON you want to validate here...&#10;&#10;Example:&#10;{&#10;  "name": "John",&#10;  "age": 30,&#10;  "email": "john@example.com"&#10;}'></textarea>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label schema-label-row" for="schema-area">
+                            <span><i class="fas fa-sitemap"></i> JSON Schema</span>
+                            <button class="load-example-btn" id="load-schema-example">Load Example</button>
+                        </label>
+                        <textarea class="textarea" id="schema-area" placeholder='Paste a JSON Schema here...&#10;&#10;Example:&#10;{&#10;  "type": "object",&#10;  "required": ["name", "age"],&#10;  "properties": {&#10;    "name": { "type": "string" },&#10;    "age": { "type": "integer", "minimum": 0 }&#10;  }&#10;}'></textarea>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button class="button" id="schema-validate-btn">
+                        <i class="fas fa-check-double"></i> Validate
+                    </button>
+                    <button class="button clear-button" id="schema-clear-btn">
+                        <i class="fas fa-eraser"></i> Clear
+                    </button>
+                </div>
+                <div id="schema-result-area" style="display:none"></div>
             </div>
         </main>
         
