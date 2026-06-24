@@ -1,3 +1,19 @@
+// #region agent log
+const __dbg = (location, message, data, hypothesisId) => {
+    try {
+        fetch('http://127.0.0.1:7407/ingest/5e83c94c-89c8-47b3-956a-93e1eab26603', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'ebd0e3' },
+            body: JSON.stringify({ sessionId: 'ebd0e3', hypothesisId, location, message, data, timestamp: Date.now() })
+        }).catch(() => {});
+    } catch (e) {}
+};
+__dbg('script.js:load', 'SCRIPT LOADED build=missing-brace-v2', { ts: Date.now() }, 'H1');
+window.addEventListener('error', (e) => {
+    __dbg('window:onerror', 'Uncaught error', { message: e.message, source: e.filename, line: e.lineno, stack: e.error && e.error.stack }, 'H2');
+});
+// #endregion
+
 // DOM Utility Functions
 const DOM = {
     elements: {
@@ -143,163 +159,677 @@ const JsonUtils = {
 };
 
 // JSON Auto-Fixer
-const JsonFixer = {
-    tryParse(s) {
-        try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return null; }
-    },
+//
+// Robust, parser-based JSON repair. Instead of guessing with a stack of
+// regexes, it walks the input character-by-character and rebuilds a valid JSON
+// document, repairing virtually every common class of error:
+//   - missing, extra, leading, and trailing commas
+//   - missing colons between keys and values
+//   - missing values (filled with null) and missing closing }/]
+//   - unquoted object keys and unquoted string values
+//   - single quotes and smart/curly quotes -> double quotes
+//   - unclosed / unterminated strings
+//   - mismatched or unescaped quotes inside strings
+//   - // line comments and /* block comments
+//   - Markdown ``` code fences and JSONP / MongoDB function call wrappers
+//   - Python literals (None / True / False) and `undefined`
+//   - concatenated strings ("a" + "b"), ellipsis (1, 2, ...), regex literals
+//   - Newline-Delimited JSON (NDJSON) -> a single array
+//   - invalid escape sequences, unescaped control characters, bad numbers
+//
+// Ported from the MIT-licensed `jsonrepair` algorithm by Jos de Jong.
 
-    // Pre-processing: strip wrappers and normalize before any repair
-    preProcess(s) {
-        // Strip fenced code blocks: ```json ... ``` or ``` ... ```
-        s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+const JsonRepairError = class extends Error {
+    constructor(message, position) {
+        super(`${message} at position ${position}`);
+        this.position = position;
+    }
+};
 
-        // Strip JSONP wrapper: callback({...}) or jQuery123({...})
-        s = s.replace(/^\s*[a-zA-Z_$][a-zA-Z0-9_$.]*\s*\((\s*[\[{][\s\S]*[\]}]\s*)\)\s*;?\s*$/, '$1').trim();
+// ---- character classification helpers ----
+const _isHex = (char) => /^[0-9A-Fa-f]$/.test(char);
+const _isDigit = (char) => char >= '0' && char <= '9';
+const _isValidStringCharacter = (char) => char >= '\u0020';
+const _isDelimiter = (char) => ',:[]/{}()\n+'.includes(char);
+const _isFunctionNameCharStart = (char) =>
+    (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char === '_' || char === '$';
+const _isFunctionNameChar = (char) => _isFunctionNameCharStart(char) || (char >= '0' && char <= '9');
+const _regexUrlStart = /^(http|https|ftp|mailto|file|data|irc):\/\/$/;
+const _regexUrlChar = /^[A-Za-z0-9-._~:/?#@!$&'()*+;=]$/;
+const _isUnquotedStringDelimiter = (char) => ',[]/{}\n+'.includes(char);
+const _regexStartOfValue = /^[[{\w-]$/;
+const _isStartOfValue = (char) => _isQuote(char) || _regexStartOfValue.test(char);
+const _isControlCharacter = (char) =>
+    char === '\n' || char === '\r' || char === '\t' || char === '\b' || char === '\f';
 
-        // Normalize smart/curly quotes to straight quotes
-        s = s.replace(/[\u201C\u201D\u275D\u275E\u301D\u301E\uFF02]/g, '"'); // curly double
-        s = s.replace(/[\u2018\u2019\u275B\u275C\u201A\u201B]/g, "'");       // curly single
+const _codeSpace = 0x20, _codeNewline = 0xa, _codeTab = 0x9, _codeReturn = 0xd;
+const _codeNonBreakingSpace = 0xa0, _codeEnQuad = 0x2000, _codeHairSpace = 0x200a;
+const _codeNarrowNoBreakSpace = 0x202f, _codeMediumMathematicalSpace = 0x205f, _codeIdeographicSpace = 0x3000;
 
-        // Strip JavaScript-style line comments (// ...) — avoid stripping inside strings
-        s = s.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*/g, (_, str) => str || '');
+const _isWhitespace = (text, index) => {
+    const code = text.charCodeAt(index);
+    return code === _codeSpace || code === _codeNewline || code === _codeTab || code === _codeReturn;
+};
+const _isWhitespaceExceptNewline = (text, index) => {
+    const code = text.charCodeAt(index);
+    return code === _codeSpace || code === _codeTab || code === _codeReturn;
+};
+const _isSpecialWhitespace = (text, index) => {
+    const code = text.charCodeAt(index);
+    return code === _codeNonBreakingSpace ||
+        (code >= _codeEnQuad && code <= _codeHairSpace) ||
+        code === _codeNarrowNoBreakSpace ||
+        code === _codeMediumMathematicalSpace ||
+        code === _codeIdeographicSpace;
+};
 
-        // Strip block comments (/* ... */) — avoid stripping inside strings
-        s = s.replace(/("(?:[^"\\]|\\.)*")|\/\*[\s\S]*?\*\//g, (_, str) => str || '');
+const _isQuote = (char) => _isDoubleQuoteLike(char) || _isSingleQuoteLike(char);
+const _isDoubleQuoteLike = (char) => char === '"' || char === '\u201c' || char === '\u201d';
+const _isDoubleQuote = (char) => char === '"';
+const _isSingleQuoteLike = (char) =>
+    char === "'" || char === '\u2018' || char === '\u2019' || char === '\u0060' || char === '\u00b4';
+const _isSingleQuote = (char) => char === "'";
 
-        return s.trim();
-    },
+const _stripLastOccurrence = (text, textToStrip, stripRemainingText = false) => {
+    const index = text.lastIndexOf(textToStrip);
+    return index !== -1
+        ? text.substring(0, index) + (stripRemainingText ? '' : text.substring(index + 1))
+        : text;
+};
+const _insertBeforeLastWhitespace = (text, textToInsert) => {
+    let index = text.length;
+    if (!_isWhitespace(text, index - 1)) return text + textToInsert;
+    while (_isWhitespace(text, index - 1)) index--;
+    return text.substring(0, index) + textToInsert + text.substring(index);
+};
+const _removeAtIndex = (text, start, count) => text.substring(0, start) + text.substring(start + count);
+const _endsWithCommaOrNewline = (text) => /[,\n][ \t\r]*$/.test(text);
+const _atEndOfBlockComment = (text, i) => text[i] === '*' && text[i + 1] === '/';
 
-    applyBaseFixes(s) {
-        // Python literals → JSON equivalents
-        s = s.replace(/\bNone\b/g, 'null');
-        s = s.replace(/\bTrue\b/g, 'true');
-        s = s.replace(/\bFalse\b/g, 'false');
-        // Remove trailing commas before } or ]
-        s = s.replace(/,(\s*[}\]])/g, '$1');
-        // Quote unquoted object keys
-        s = s.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)(\s*:)/g, '$1"$2"$3');
-        // Add missing commas: value end followed by newline then a new key/value
-        s = s.replace(/(["\d\]}\w])(\s*\n\s*)(")/g, '$1,$2$3');
-        // Fix missing colon between key and value: "key" value → "key": value
-        // Uses a lookahead for the value start so it's not consumed by the match
-        const valLookahead = '(?=(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d|true|false|null|\\{|\\[))';
-        s = s.replace(
-            new RegExp('([{,]\\s*"[^"]*")(\\s+)(?!:)' + valLookahead, 'g'),
-            '$1:$2'
-        );
-        // Fix missing opening bracket for bare array values:
-        // "key": val1, val2  (val2 is not "key": pattern) → "key": [val1, val2]
-        // Walk through and collect consecutive non-key values after a colon
-        s = this._fixMissingArrayBrackets(s);
-        return s;
-    },
+const _controlCharacters = { '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+const _escapeCharacters = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
-    // Detects: ": value, value, ..." where subsequent values have no key,
-    // and wraps them in [ ... ]
-    _fixMissingArrayBrackets(s) {
-        // Pattern: after ": " we have value, value (where the next "value" is NOT "key":)
-        // We handle this with a targeted regex for the most common case:
-        // ": primitiveOrString, primitiveOrString" at object level
-        const prim = '(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?|true|false|null)';
-        // Detects ": val, val" where val2 is not followed by ":"
-        // Replace with ": [val, val"  — close bracket added by closeAndRepair or below
-        const re = new RegExp(
-            '(:\\s*)(' + prim + ')((?:\\s*,\\s*' + prim + ')+)(\\s*[,}\\]])',
-            'g'
-        );
-        return s.replace(re, (match, colon, first, rest, tail) => {
-            // Only wrap if rest contains values without keys (no "key": pattern inside)
-            if (/"\s*:/.test(rest)) return match; // has key:value, skip
-            return `${colon}[${first}${rest}]${tail}`;
-        });
-    },
+/**
+ * Repair a string containing an invalid JSON document and return valid JSON.
+ * Throws JsonRepairError when the input cannot be repaired.
+ */
+function jsonRepair(text) {
+    let i = 0;
+    let output = '';
 
-    // Walks the string char-by-char and repairs:
-    //  - unclosed strings (closes them at newline or EOF)
-    //  - missing closing brackets/braces at EOF
-    closeAndRepair(s) {
-        let out = '';
-        const stack = [];
-        let inString = false, escape = false;
-        for (let i = 0; i < s.length; i++) {
-            const ch = s[i];
-            if (escape) { escape = false; out += ch; continue; }
-            if (ch === '\\' && inString) { escape = true; out += ch; continue; }
-            if (ch === '"') { inString = !inString; out += ch; continue; }
-            if (inString) {
-                // Newline or carriage return inside a string is invalid — close the string
-                if (ch === '\n' || ch === '\r') {
-                    out += '"';
-                    inString = false;
-                    out += ch;
-                } else {
-                    out += ch;
-                }
-                continue;
+    parseMarkdownCodeBlock();
+    const processed = parseValue();
+    if (!processed) throwUnexpectedEnd();
+    parseMarkdownCodeBlock();
+
+    const processedComma = parseCharacter(',');
+    if (processedComma) parseWhitespaceAndSkipComments();
+
+    if (_isStartOfValue(text[i]) && _endsWithCommaOrNewline(output)) {
+        if (!processedComma) output = _insertBeforeLastWhitespace(output, ',');
+        parseNewlineDelimitedJSON();
+    } else if (processedComma) {
+        output = _stripLastOccurrence(output, ',');
+    }
+
+    // repair redundant end quotes/brackets
+    while (text[i] === '}' || text[i] === ']') {
+        i++;
+        parseWhitespaceAndSkipComments();
+    }
+
+    if (i >= text.length) return output;
+    throwUnexpectedCharacter();
+
+    function parseValue() {
+        parseWhitespaceAndSkipComments();
+        const processed = parseObject() || parseArray() || parseString() || parseNumber() ||
+            parseKeywords() || parseUnquotedString(false) || parseRegex();
+        parseWhitespaceAndSkipComments();
+        return processed;
+    }
+
+    function parseWhitespaceAndSkipComments(skipNewline = true) {
+        const start = i;
+        let changed = parseWhitespace(skipNewline);
+        do {
+            changed = parseComment();
+            if (changed) changed = parseWhitespace(skipNewline);
+        } while (changed);
+        return i > start;
+    }
+
+    function parseWhitespace(skipNewline) {
+        const isWhite = skipNewline ? _isWhitespace : _isWhitespaceExceptNewline;
+        let whitespace = '';
+        while (true) {
+            if (isWhite(text, i)) {
+                whitespace += text[i];
+                i++;
+            } else if (_isSpecialWhitespace(text, i)) {
+                whitespace += ' ';
+                i++;
+            } else {
+                break;
             }
-            // Outside string
-            if (ch === '{') stack.push('}');
-            else if (ch === '[') stack.push(']');
-            else if ((ch === '}' || ch === ']') && stack.length) stack.pop();
-            out += ch;
         }
-        if (inString) out += '"';          // close string at EOF
-        out += stack.reverse().join('');   // close missing brackets
-        return out;
-    },
+        if (whitespace.length > 0) {
+            output += whitespace;
+            return true;
+        }
+        return false;
+    }
 
+    function parseComment() {
+        if (text[i] === '/' && text[i + 1] === '*') {
+            while (i < text.length && !_atEndOfBlockComment(text, i)) i++;
+            i += 2;
+            return true;
+        }
+        if (text[i] === '/' && text[i + 1] === '/') {
+            while (i < text.length && text[i] !== '\n') i++;
+            return true;
+        }
+        return false;
+    }
+
+    function parseMarkdownCodeBlock() {
+        if (text.slice(i, i + 3) === '```') {
+            i += 3;
+            if (_isFunctionNameCharStart(text[i])) {
+                while (i < text.length && _isFunctionNameChar(text[i])) i++;
+            }
+            parseWhitespaceAndSkipComments();
+            return true;
+        }
+        return false;
+    }
+
+    function parseCharacter(char) {
+        if (text[i] === char) {
+            output += text[i];
+            i++;
+            return true;
+        }
+        return false;
+    }
+
+    function skipCharacter(char) {
+        if (text[i] === char) {
+            i++;
+            return true;
+        }
+        return false;
+    }
+
+    function skipEscapeCharacter() {
+        return skipCharacter('\\');
+    }
+
+    function skipEllipsis() {
+        parseWhitespaceAndSkipComments();
+        if (text[i] === '.' && text[i + 1] === '.' && text[i + 2] === '.') {
+            i += 3;
+            parseWhitespaceAndSkipComments();
+            skipCharacter(',');
+            return true;
+        }
+        return false;
+    }
+
+    function parseObject() {
+        if (text[i] === '{') {
+            output += '{';
+            i++;
+            return parseObjectBody();
+        }
+        return false;
+    }
+
+    // Parse the body of an object (everything after the opening brace) up to and
+    // including the closing brace. Assumes the opening '{' has already been
+    // emitted to the output and consumed/inferred from the input.
+    function parseObjectBody() {
+        parseWhitespaceAndSkipComments();
+
+        if (skipCharacter(',')) parseWhitespaceAndSkipComments();
+
+        let initial = true;
+        while (i < text.length && text[i] !== '}') {
+            let processedComma;
+            if (!initial) {
+                processedComma = parseCharacter(',');
+                if (!processedComma) output = _insertBeforeLastWhitespace(output, ',');
+                parseWhitespaceAndSkipComments();
+            } else {
+                processedComma = true;
+                initial = false;
+            }
+
+            skipEllipsis();
+
+            const processedKey = parseString() || parseUnquotedString(true);
+            if (!processedKey) {
+                if (text[i] === '}' || text[i] === '{' || text[i] === ']' ||
+                    text[i] === '[' || text[i] === undefined) {
+                    output = _stripLastOccurrence(output, ',');
+                } else {
+                    throwObjectKeyExpected();
+                }
+                break;
+            }
+
+            parseWhitespaceAndSkipComments();
+            const processedColon = parseCharacter(':');
+            const truncatedText = i >= text.length;
+            if (!processedColon) {
+                if (_isStartOfValue(text[i]) || truncatedText) {
+                    output = _insertBeforeLastWhitespace(output, ':');
+                } else {
+                    throwColonExpected();
+                }
+            }
+            // Repair a missing opening brace: when a key's value is itself a
+            // naked object body (e.g. `"key": "subKey": value ... }`), insert
+            // the '{' and parse it as an object.
+            let processedValue;
+            if (isStartOfMissingBraceObject()) {
+                output += '{';
+                processedValue = parseObjectBody();
+            } else {
+                processedValue = parseValue();
+            }
+            if (!processedValue) {
+                if (processedColon || truncatedText) {
+                    output += 'null';
+                } else {
+                    throwColonExpected();
+                }
+            }
+        }
+
+        if (text[i] === '}') {
+            output += '}';
+            i++;
+        } else {
+            output = _insertBeforeLastWhitespace(output, '}');
+        }
+        return true;
+    }
+
+    // Look-ahead (no input consumed): true when the upcoming value is actually
+    // the start of an object that is missing its opening brace, i.e. a quoted
+    // key immediately followed by a colon (`"subKey":`).
+    function isStartOfMissingBraceObject() {
+        let j = i;
+        while (j < text.length && _isWhitespace(text, j)) j++;
+        if (!_isQuote(text[j])) return false;
+        j++;
+        while (j < text.length) {
+            const c = text[j];
+            if (c === '\\') { j += 2; continue; }
+            if (c === '\n') return false; // unterminated string — not this case
+            if (_isQuote(c)) { j++; break; }
+            j++;
+        }
+        while (j < text.length && _isWhitespace(text, j)) j++;
+        return text[j] === ':';
+    }
+
+    function parseArray() {
+        if (text[i] === '[') {
+            output += '[';
+            i++;
+            parseWhitespaceAndSkipComments();
+
+            if (skipCharacter(',')) parseWhitespaceAndSkipComments();
+
+            let initial = true;
+            while (i < text.length && text[i] !== ']') {
+                if (!initial) {
+                    const processedComma = parseCharacter(',');
+                    if (!processedComma) output = _insertBeforeLastWhitespace(output, ',');
+                } else {
+                    initial = false;
+                }
+
+                skipEllipsis();
+
+                const processedValue = parseValue();
+                if (!processedValue) {
+                    output = _stripLastOccurrence(output, ',');
+                    break;
+                }
+            }
+
+            if (text[i] === ']') {
+                output += ']';
+                i++;
+            } else {
+                output = _insertBeforeLastWhitespace(output, ']');
+            }
+            return true;
+        }
+        return false;
+    }
+
+    function parseNewlineDelimitedJSON() {
+        let initial = true;
+        let processedValue = true;
+        while (processedValue) {
+            if (!initial) {
+                const processedComma = parseCharacter(',');
+                if (!processedComma) output = _insertBeforeLastWhitespace(output, ',');
+            } else {
+                initial = false;
+            }
+            processedValue = parseValue();
+        }
+        if (!processedValue) output = _stripLastOccurrence(output, ',');
+        output = `[\n${output}\n]`;
+    }
+
+    function parseString(stopAtDelimiter = false, stopAtIndex = -1) {
+        let skipEscapeChars = text[i] === '\\';
+        if (skipEscapeChars) {
+            i++;
+            skipEscapeChars = true;
+        }
+        if (_isQuote(text[i])) {
+            const isEndQuote = _isDoubleQuote(text[i]) ? _isDoubleQuote
+                : _isSingleQuote(text[i]) ? _isSingleQuote
+                : _isSingleQuoteLike(text[i]) ? _isSingleQuoteLike
+                : _isDoubleQuoteLike;
+
+            const iBefore = i;
+            const oBefore = output.length;
+            let str = '"';
+            i++;
+
+            while (true) {
+                if (i >= text.length) {
+                    const iPrev = prevNonWhitespaceIndex(i - 1);
+                    if (!stopAtDelimiter && _isDelimiter(text.charAt(iPrev))) {
+                        i = iBefore;
+                        output = output.substring(0, oBefore);
+                        return parseString(true);
+                    }
+                    str = _insertBeforeLastWhitespace(str, '"');
+                    output += str;
+                    return true;
+                } else if (i === stopAtIndex) {
+                    str = _insertBeforeLastWhitespace(str, '"');
+                    output += str;
+                    return true;
+                } else if (text[i] === '\n' || text[i] === '\r') {
+                    // Unterminated string: a raw newline inside a string almost
+                    // always means a missing closing quote. Close the string at
+                    // the end of the current line rather than swallowing the
+                    // following structural characters (e.g. a closing brace).
+                    str = _insertBeforeLastWhitespace(str, '"');
+                    output += str;
+                    return true;
+                } else if (isEndQuote(text[i])) {
+                    const iQuote = i;
+                    const oQuote = str.length;
+                    str += '"';
+                    i++;
+                    output += str;
+                    parseWhitespaceAndSkipComments(false);
+                    if (stopAtDelimiter || i >= text.length || _isDelimiter(text[i]) ||
+                        _isQuote(text[i]) || _isDigit(text[i])) {
+                        parseConcatenatedString();
+                        return true;
+                    }
+                    const iPrevChar = prevNonWhitespaceIndex(iQuote - 1);
+                    const prevChar = text.charAt(iPrevChar);
+                    if (prevChar === ',') {
+                        i = iBefore;
+                        output = output.substring(0, oBefore);
+                        return parseString(false, iPrevChar);
+                    }
+                    if (_isDelimiter(prevChar)) {
+                        i = iBefore;
+                        output = output.substring(0, oBefore);
+                        return parseString(true);
+                    }
+                    output = output.substring(0, oBefore);
+                    i = iQuote + 1;
+                    str = `${str.substring(0, oQuote)}\\${str.substring(oQuote)}`;
+                } else if (stopAtDelimiter && _isUnquotedStringDelimiter(text[i])) {
+                    if (text[i - 1] === ':' && _regexUrlStart.test(text.substring(iBefore + 1, i + 2))) {
+                        while (i < text.length && _regexUrlChar.test(text[i])) {
+                            str += text[i];
+                            i++;
+                        }
+                    }
+                    str = _insertBeforeLastWhitespace(str, '"');
+                    output += str;
+                    parseConcatenatedString();
+                    return true;
+                } else if (text[i] === '\\') {
+                    const char = text.charAt(i + 1);
+                    const escapeChar = _escapeCharacters[char];
+                    if (escapeChar !== undefined) {
+                        str += text.slice(i, i + 2);
+                        i += 2;
+                    } else if (char === 'u') {
+                        let j = 2;
+                        while (j < 6 && _isHex(text[i + j])) j++;
+                        if (j === 6) {
+                            str += text.slice(i, i + 6);
+                            i += 6;
+                        } else if (i + j >= text.length) {
+                            i = text.length;
+                        } else {
+                            throwInvalidUnicodeCharacter();
+                        }
+                    } else {
+                        str += char;
+                        i += 2;
+                    }
+                } else {
+                    const char = text.charAt(i);
+                    if (char === '"' && text[i - 1] !== '\\') {
+                        str += `\\${char}`;
+                        i++;
+                    } else if (_isControlCharacter(char)) {
+                        str += _controlCharacters[char];
+                        i++;
+                    } else {
+                        if (!_isValidStringCharacter(char)) throwInvalidCharacter(char);
+                        str += char;
+                        i++;
+                    }
+                }
+                if (skipEscapeChars) skipEscapeCharacter();
+            }
+        }
+        return false;
+    }
+
+    function parseConcatenatedString() {
+        let processed = false;
+        parseWhitespaceAndSkipComments();
+        while (text[i] === '+') {
+            processed = true;
+            i++;
+            parseWhitespaceAndSkipComments();
+            output = _stripLastOccurrence(output, '"', true);
+            const start = output.length;
+            const parsedStr = parseString();
+            if (parsedStr) {
+                output = _removeAtIndex(output, start, 1);
+            } else {
+                output = _insertBeforeLastWhitespace(output, '"');
+            }
+        }
+        return processed;
+    }
+
+    function parseNumber() {
+        const start = i;
+        if (text[i] === '-') {
+            i++;
+            if (atEndOfNumber()) { repairNumberEndingWithNumericSymbol(start); return true; }
+            if (!_isDigit(text[i])) { i = start; return false; }
+        }
+        while (_isDigit(text[i])) i++;
+        if (text[i] === '.') {
+            i++;
+            if (atEndOfNumber()) { repairNumberEndingWithNumericSymbol(start); return true; }
+            if (!_isDigit(text[i])) { i = start; return false; }
+            while (_isDigit(text[i])) i++;
+        }
+        if (text[i] === 'e' || text[i] === 'E') {
+            i++;
+            if (text[i] === '-' || text[i] === '+') i++;
+            if (atEndOfNumber()) { repairNumberEndingWithNumericSymbol(start); return true; }
+            if (!_isDigit(text[i])) { i = start; return false; }
+            while (_isDigit(text[i])) i++;
+        }
+        if (!atEndOfNumber()) { i = start; return false; }
+        if (i > start) {
+            const num = text.slice(start, i);
+            const hasInvalidLeadingZero = /^0\d/.test(num);
+            output += hasInvalidLeadingZero ? `"${num}"` : num;
+            return true;
+        }
+        return false;
+    }
+
+    function parseKeywords() {
+        return parseKeyword('true', 'true') || parseKeyword('false', 'false') ||
+            parseKeyword('null', 'null') ||
+            parseKeyword('True', 'true') || parseKeyword('False', 'false') ||
+            parseKeyword('None', 'null');
+    }
+
+    function parseKeyword(name, value) {
+        if (text.slice(i, i + name.length) === name) {
+            output += value;
+            i += name.length;
+            return true;
+        }
+        return false;
+    }
+
+    function parseUnquotedString(isKey) {
+        const start = i;
+        if (_isFunctionNameCharStart(text[i])) {
+            while (i < text.length && _isFunctionNameChar(text[i])) i++;
+            let j = i;
+            while (_isWhitespace(text, j)) j++;
+            if (text[j] === '(') {
+                // MongoDB function call NumberLong("2") or JSONP callback({...});
+                i = j + 1;
+                parseValue();
+                if (text[i] === ')') {
+                    i++;
+                    if (text[i] === ';') i++;
+                }
+                return true;
+            }
+        }
+        while (i < text.length && !_isUnquotedStringDelimiter(text[i]) && !_isQuote(text[i]) &&
+            (!isKey || text[i] !== ':')) {
+            i++;
+        }
+        if (text[i - 1] === ':' && _regexUrlStart.test(text.substring(start, i + 2))) {
+            while (i < text.length && _regexUrlChar.test(text[i])) i++;
+        }
+        if (i > start) {
+            while (_isWhitespace(text, i - 1) && i > 0) i--;
+            const symbol = text.slice(start, i);
+            output += symbol === 'undefined' ? 'null' : JSON.stringify(symbol);
+            if (text[i] === '"') i++;
+            return true;
+        }
+        return false;
+    }
+
+    function parseRegex() {
+        if (text[i] === '/') {
+            const start = i;
+            i++;
+            while (i < text.length && (text[i] !== '/' || text[i - 1] === '\\')) i++;
+            i++;
+            output += `"${text.substring(start, i)}"`;
+            return true;
+        }
+        return false;
+    }
+
+    function prevNonWhitespaceIndex(start) {
+        let prev = start;
+        while (prev > 0 && _isWhitespace(text, prev)) prev--;
+        return prev;
+    }
+
+    function atEndOfNumber() {
+        return i >= text.length || _isDelimiter(text[i]) || _isWhitespace(text, i);
+    }
+
+    function repairNumberEndingWithNumericSymbol(start) {
+        output += `${text.slice(start, i)}0`;
+    }
+
+    function throwInvalidCharacter(char) {
+        throw new JsonRepairError(`Invalid character ${JSON.stringify(char)}`, i);
+    }
+    function throwUnexpectedCharacter() {
+        throw new JsonRepairError(`Unexpected character ${JSON.stringify(text[i])}`, i);
+    }
+    function throwUnexpectedEnd() {
+        throw new JsonRepairError('Unexpected end of json string', text.length);
+    }
+    function throwObjectKeyExpected() {
+        throw new JsonRepairError('Object key expected', i);
+    }
+    function throwColonExpected() {
+        throw new JsonRepairError('Colon expected', i);
+    }
+    function throwInvalidUnicodeCharacter() {
+        const chars = text.slice(i, i + 6);
+        throw new JsonRepairError(`Invalid unicode character "${chars}"`, i);
+    }
+}
+
+const JsonFixer = {
+    // Returns pretty-printed valid JSON, or null when the input can't be repaired.
     attemptFix(input) {
-        // Pre-process first: strip code fences, JSONP, normalize smart quotes, remove comments
-        const trimmed = this.preProcess(input.trim());
+        // #region agent log
+        __dbg('script.js:attemptFix', 'entry', { inputType: typeof input, inputLen: typeof input === 'string' ? input.length : null }, 'H2');
+        // #endregion
+        if (typeof input !== 'string') return null;
+        const trimmed = input.trim();
+        if (!trimmed) return null;
 
-        // Quick win: try after pre-processing alone
-        let result = this.tryParse(trimmed);
-        if (result) return result;
+        const candidates = [trimmed];
+        // Fully escaped JSON pasted from logs, e.g. {\"key\":\"value\"}
+        if (trimmed.includes('\\"')) candidates.push(trimmed.replace(/\\"/g, '"'));
 
-        // Strategy 0: unescape escaped JSON (\"key\" → "key")
-        if (trimmed.includes('\\"')) {
-            const unescaped = trimmed.replace(/\\"/g, '"');
-            result = this.tryParse(unescaped);
-            if (result) return result;
-            result = this.tryParse(this.applyBaseFixes(unescaped));
-            if (result) return result;
+        for (const candidate of candidates) {
+            try {
+                const repaired = jsonRepair(candidate);
+                const out = JSON.stringify(JSON.parse(repaired), null, 2);
+                // #region agent log
+                __dbg('script.js:attemptFix', 'jsonRepair candidate SUCCEEDED', { outLen: out.length }, 'H2');
+                // #endregion
+                return out;
+            } catch (e) {
+                // #region agent log
+                __dbg('script.js:attemptFix', 'jsonRepair candidate FAILED', { error: String(e && e.message) }, 'H2');
+                // #endregion
+            }
         }
 
-        const base = this.applyBaseFixes(trimmed);
-
-        // Strategy 1: base fixes only
-        result = this.tryParse(base);
-        if (result) return result;
-
-        // Strategy 2: replace ALL single quotes with double quotes
-        result = this.tryParse(base.replace(/'/g, '"'));
-        if (result) return result;
-
-        // Strategy 3: structural repair (closes unclosed strings + missing brackets)
-        const repaired = this.closeAndRepair(trimmed);
-        result = this.tryParse(repaired);
-        if (result) return result;
-
-        // Strategy 4: base fixes on structurally repaired
-        result = this.tryParse(this.applyBaseFixes(repaired));
-        if (result) return result;
-
-        // Strategy 5: single quotes on repaired
-        result = this.tryParse(repaired.replace(/'/g, '"'));
-        if (result) return result;
-
-        // Strategy 6: mismatched quote fix (e.g. "value' → "value")
-        const mismatch = base
-            .replace(/"([^"'\n]*?)'/g, '"$1"')
-            .replace(/'([^"'\n]*?)"/g, '"$1"');
-        result = this.tryParse(mismatch);
-        if (result) return result;
-
-        // Strategy 7: mismatch + structural repair combined
-        result = this.tryParse(this.closeAndRepair(mismatch));
-        if (result) return result;
-
-        return null;
+        // Last resort: maybe it was already valid JSON.
+        try {
+            return JSON.stringify(JSON.parse(trimmed), null, 2);
+        } catch {
+            return null;
+        }
     }
 };
 
@@ -1227,6 +1757,9 @@ const EventHandlers = {
             const input = DOM.elements.errorMessage._fixInput;
             if (!input) return;
             const fixed = JsonFixer.attemptFix(input);
+            // #region agent log
+            __dbg('script.js:fixButton', 'attemptFix returned', { fixedIsNull: fixed === null, fixedLen: fixed && fixed.length }, 'H2');
+            // #endregion
             if (fixed) {
                 DOM.elements.inputArea.value = fixed;
                 DOM.elements.processButton.click();
